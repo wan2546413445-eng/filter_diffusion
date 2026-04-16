@@ -122,10 +122,7 @@ def main():
         channels=2,
         timesteps=config.training.timesteps,
         loss_type=config.training.loss_type,
-        blur_routine=config.training.blur_routine,
-        train_routine=config.training.train_routine,
-        sampling_routine=config.training.sampling_routine,
-        discrete=config.training.discrete,
+
         schedule_type=getattr(config.training, 'filter_schedule_type', 'linear'),
         center_core_size=getattr(config.training, 'center_core_size', 32)
     ).to(device)

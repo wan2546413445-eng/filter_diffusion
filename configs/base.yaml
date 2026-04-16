@@ -41,20 +41,17 @@ model:
 
 training:
   batch_size: 4
-
-  lr: 2e-5
-
-  timesteps: 100
+  lr: 1e-4
+  timesteps: 20
   loss_type: l1
-  blur_routine: Constant
-  train_routine: Final
-  sampling_routine: x0_step_down
-  discrete: False
+  filter_schedule_type: linear
+  center_core_size: 32
+
   ema_decay: 0.995
-  train_num_steps: 50000  #  原本是2000
+  train_num_steps: 40000
   gradient_accumulate_every: 2
   fp16: False
   step_start_ema: 5000
   update_ema_every: 10
   save_and_sample_every: 1000
-  results_folder: './results_1'
+  results_folder: './results_filterdiff'

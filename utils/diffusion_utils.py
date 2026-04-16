@@ -7,6 +7,30 @@ import glob
 import scipy.io as scio
 import random
 
+def cycle(dl):
+    while True:
+        for data in dl:
+            yield data
+
+
+class EMA:
+    def __init__(self, beta):
+        self.beta = beta
+
+    def update_model_average(self, ma_model, current_model):
+        for current_params, ma_params in zip(current_model.parameters(), ma_model.parameters()):
+            ma_params.data = self.update_average(ma_params.data, current_params.data)
+
+    def update_average(self, old, new):
+        if old is None:
+            return new
+        return old * self.beta + (1.0 - self.beta) * new
+
+
+def loss_backwards(fp16, loss, optimizer, **kwargs):
+    if fp16:
+        raise NotImplementedError("fp16 not supported in this lightweight version")
+    loss.backward(**kwargs)
 # ---------- 种子设置 ----------
 def setup_seed(seed):
     np.random.seed(seed)
