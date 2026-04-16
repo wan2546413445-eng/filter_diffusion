@@ -1,0 +1,60 @@
+seed: 42
+device: 'cuda'
+
+data:
+  dataset_name: fastMRI_knee
+  image_size: 320
+  R: 4
+  mask_type: gaussian_diffusion   # gaussian_diffusion, random_diffusion, equispace_diffusion
+  center_fraction: 0.08
+  patch_size: 4
+  seed: 42
+
+
+  combine_coil: true
+
+  # 建议训练时先保持和你之前一致；如果你想全切片训练再改成 0
+  num_skip_slice: 5
+
+  normalize_type: minmax
+  normalize_coeff: 1.0
+  num_workers: 8
+
+  # ========= kspace 路径 =========
+  data_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_train_knee/kspace
+  test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
+  sample_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
+
+  # 可选：快速 debug 时可手动改成 val
+  # test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
+  # sample_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
+
+  # ========= maps 根目录 =========
+  # 注意：这里填总目录，不是具体某个 maps 子文件夹
+  maps_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data
+  map_key: s_maps
+
+model:
+  dim: 64
+  dim_mults: [1, 2, 4, 8]
+  residual: False
+
+training:
+  batch_size: 4
+
+  lr: 2e-5
+
+  timesteps: 100
+  loss_type: l1
+  blur_routine: Constant
+  train_routine: Final
+  sampling_routine: x0_step_down
+  discrete: False
+  ema_decay: 0.995
+  train_num_steps: 50000  #  原本是2000
+  gradient_accumulate_every: 2
+  fp16: False
+  step_start_ema: 5000
+  update_ema_every: 10
+  save_and_sample_every: 1000
+  results_folder: './results_1'
