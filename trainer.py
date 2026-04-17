@@ -1,3 +1,4 @@
+# trainer.py
 import math
 import copy
 import torch
@@ -214,14 +215,15 @@ class Trainer:
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
-            save_start_step = 6000
-            save_interval_after_start = 100
-
-            if self.step >= save_start_step and (self.step - save_start_step) % save_interval_after_start == 0:
-                print(f'Saving checkpoint at step {self.step}, acc_loss={acc_loss:.6f}')
+            if self.step != 0 and self.step % self.save_and_sample_every == 0:
+                acc_loss = acc_loss / (self.save_and_sample_every + 1)
+                print(f'Mean LOSS of last {self.step}: {acc_loss:.6f}')
                 acc_loss = 0
                 self.save(self.step)
-        self.save(self.step)
+                if self.step % (self.save_and_sample_every * 100) == 0:
+                    self.save(self.step)
+
+        self.save(self.step + 1)
         print('training completed')
 
     def test(self, t, num_samples=1):
@@ -257,12 +259,13 @@ class Trainer:
 
                 B, Nc, H, W, C = kspace.shape
                 gt_imgs = fastmri.ifft2c(kspace)  # [B,Nc,H,W,2]
+                k_c = kspace * mask.unsqueeze(-1)
 
                 if num_samples == 1:
-                    xt, direct_recons, sample_imgs = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                    xt, direct_recons, sample_imgs = self.ema_model.sample(k_c, mask, mask_fold, t=t)
                 else:
                     for i_sample in range(num_samples):
-                        xti, direct_reconsi, sample_imgsi = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                        xti, direct_reconsi, sample_imgsi = self.ema_model.sample(k_c, mask, mask_fold, t=t)
                         if i_sample == 0:
                             xt = xti
                             direct_recons = direct_reconsi
@@ -330,12 +333,13 @@ class Trainer:
 
             B, Nc, H, W, C = kspace.shape
             gt_imgs = fastmri.ifft2c(kspace)
+            k_c = kspace * mask.unsqueeze(-1)
 
             if num_samples == 1:
-                xt, direct_recons, sample_imgs = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                xt, direct_recons, sample_imgs = self.ema_model.sample(k_c, mask, mask_fold, t=t)
             else:
                 for i_sample in range(num_samples):
-                    xti, direct_reconsi, sample_imgsi = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                    xti, direct_reconsi, sample_imgsi = self.ema_model.sample(k_c, mask, mask_fold, t=t)
                     if i_sample == 0:
                         xt = xti
                         direct_recons = direct_reconsi

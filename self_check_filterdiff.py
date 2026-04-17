@@ -1,3 +1,4 @@
+# self_check_filterdiff.py
 """
 Minimal self-check script for current FilterDiff-style implementation.
 
@@ -39,8 +40,9 @@ def main():
         channels=2,
         timesteps=T,
         loss_type="l1",
-        schedule_type="linear",
+        schedule_type="dense",
         center_core_size=16,
+        use_explicit_dc=True,
     ).to(device)
 
     # Dummy complex k-space and acquisition mask (1=observed)
@@ -118,10 +120,9 @@ def main():
 
     # ---------- sample/reverse check ----------
     print("\n[4] Sample mode self-check")
-    print("Current sample mode = paired validation mode (k_T initialized from full kspace).")
+    print("Current sample mode = kc-only inference mode (k_T initialized from k_c).")
 
-    t_init = torch.full((B,), T, dtype=torch.long, device=device)
-    cur_k = kspace * model.schedule.get_by_t(t_init, device=device, dtype=kspace.dtype)
+    cur_k = k_c
     print_shape("cur_k@init(k_T)", cur_k)
 
     for ts in range(T, 0, -1):
@@ -141,7 +142,7 @@ def main():
     # ---------- minimal smoke ----------
     print("\n[5] Minimal smoke test")
     loss = model(kspace, mask, None)
-    xt, direct_recons, img = model.sample(kspace, mask, None, t=T)
+    xt, direct_recons, img = model.sample(k_c, mask, None, t=T)
     print("forward loss:", float(loss.item()))
     print_shape("xt", xt)
     if direct_recons is not None:
