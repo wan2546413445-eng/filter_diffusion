@@ -17,12 +17,11 @@ from utils.sample_mask import RandomMaskGaussianDiffusion
 from models.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 
-
 def build_model(config, device):
     denoise_fn = Unet(
         dim=config.model.dim,
         out_dim=2,
-        channels=2,
+        channels=5,  # ⚠️ 和 train.py 保持一致
         dim_mults=tuple(config.model.dim_mults),
         with_time_emb=True,
         residual=config.model.residual,
@@ -35,10 +34,9 @@ def build_model(config, device):
         channels=2,
         timesteps=config.training.timesteps,
         loss_type=config.training.loss_type,
-        blur_routine=config.training.blur_routine,
-        train_routine=config.training.train_routine,
-        sampling_routine=config.training.sampling_routine,
-        discrete=config.training.discrete,
+
+        schedule_type=getattr(config.training, 'filter_schedule_type', 'linear'),
+        center_core_size=getattr(config.training, 'center_core_size', 32)
     ).to(device)
 
     return model
@@ -60,6 +58,8 @@ def build_dataset(config, data_root):
         img_size=config.data.image_size,
         combine_coil=combine_coil,
         flag_singlecoil=False,
+        maps_root=getattr(config.data, 'maps_root', None),
+        map_key=getattr(config.data, 'map_key', 's_maps'),
     )
 
     dataset = SliceDataset(
@@ -122,11 +122,16 @@ def evaluate_one_checkpoint(
             assert torch.isfinite(gt_tensor).all() and torch.isfinite(recon_tensor).all(), (
                 "NaN or Inf found"
             )
+            print("gt max:", gt_tensor.max().item())
+            print("recon max:", recon_tensor.max().item())
 
-            # 共享 GT 尺度
-            scale = torch.clamp(gt_tensor.max(), min=1e-8)
-            gt_eval = gt_tensor / scale
-            recon_eval = recon_tensor / scale
+
+            # gt 和 recon 分别按各自最大值归一化到 1
+            gt_scale = torch.clamp(gt_tensor.max(), min=1e-8)
+            recon_scale = torch.clamp(recon_tensor.max(), min=1e-8)
+
+            gt_eval = gt_tensor / gt_scale
+            recon_eval = recon_tensor / recon_scale
 
             mse = torch.mean((gt_eval - recon_eval) ** 2)
             psnr = 10 * torch.log10(1.0 / (mse + 1e-12))
@@ -163,18 +168,26 @@ def extract_step(path_obj: pathlib.Path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--ckpt_dir", type=str, required=True)
-    parser.add_argument("--val_root", type=str, required=True)
-    parser.add_argument("--t", type=int, default=100)
+    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--ckpt_dir", type=str, default=None)
+    parser.add_argument("--val_root", type=str, default=None)
+    parser.add_argument("--t", type=int, default=20)
     parser.add_argument("--select_by", type=str, default="psnr", choices=["psnr", "ssim"])
-    parser.add_argument("--max_cases", type=int, default=None)
-    parser.add_argument("--save_csv", type=str, default="val_summary.csv")
+    parser.add_argument("--max_cases", type=int, default=15)
+    parser.add_argument("--save_csv", type=str, default="filterdiff_ckpt_scan.csv")
     parser.add_argument("--pattern", type=str, default="model_*.pt")
-    parser.add_argument("--stride", type=int, default=10000)
-    parser.add_argument("--start_step", type=int, default=0)
-    parser.add_argument("--end_step", type=int, default=10 ** 9)
+    parser.add_argument("--stride", type=int, default=100)
+    parser.add_argument("--start_step", type=int, default=6000)
+    parser.add_argument("--end_step", type=int, default=9900)
+    parser.add_argument("--debug_idx", type=int, default=0)
     args = parser.parse_args()
+
+    if args.config is None:
+        args.config = "configs/base.yaml"
+    if args.ckpt_dir is None:
+        args.ckpt_dir = "/mnt/SSD/wsy/projects/filter_diffusion/results_filterdiff_1"
+    if args.val_root is None:
+        args.val_root = "/mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace"
 
     with open(args.config, "r") as f:
         config_dict = yaml.safe_load(f)

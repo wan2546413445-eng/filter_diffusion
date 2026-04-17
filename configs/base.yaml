@@ -26,8 +26,8 @@ data:
   sample_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
 
   # 可选：快速 debug 时可手动改成 val
-  # test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
-  # sample_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
+  #test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
+  #sample_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
 
   # ========= maps 根目录 =========
   # 注意：这里填总目录，不是具体某个 maps 子文件夹
@@ -48,10 +48,10 @@ training:
   center_core_size: 32
 
   ema_decay: 0.995
-  train_num_steps: 40000
+  train_num_steps: 10000
   gradient_accumulate_every: 2
   fp16: False
-  step_start_ema: 5000
+  step_start_ema: 1000
   update_ema_every: 10
   save_and_sample_every: 1000
-  results_folder: './results_filterdiff'
+  results_folder: './results_filterdiff_1'

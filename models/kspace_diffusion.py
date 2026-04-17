@@ -58,25 +58,34 @@ class KspaceDiffusion(nn.Module):
     def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         bsz, ncoil, h, w, _ = kspace.shape
 
+        # 1. 获取当前时刻 t 和前一刻 t-1 的滤波掩码
         m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
         t_minus_1 = torch.clamp(t - 1, min=0)
         m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
 
+        # 2. 前向退化：k_t = M_t * k_0
         k_t = apply_filter_degradation(kspace, m_t)
+        # 3. 条件部分：k_c = M_acq * k_0（采集到的低频/中心部分）
         k_c = self._build_conditional_kc(kspace, mask)
+        # 4. 真实目标残差：delta_gt = (M_{t-1} - M_t) * k_0
         delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
 
-        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)
+        # 5. 准备网络输入：将 k_t, k_c, m_t 沿通道拼接
+        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)  # 扩展到多线圈
 
+        # 将 [B,Nc,H,W,2] 展平为 [B*Nc,H,W,2]，然后 permute 为 [B*Nc,2,H,W]
         kt_in = k_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
         kc_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
         mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
 
-        model_in = torch.cat([kt_in, kc_in, mt_in], dim=1)  # [B*Nc,5,H,W]
-        t_in = t.repeat_interleave(ncoil)
+        # 拼接：最终输入形状 [B*Nc, 5, H, W]（2+2+1=5）
+        model_in = torch.cat([kt_in, kc_in, mt_in], dim=1)
+        t_in = t.repeat_interleave(ncoil)  # 时间步复制到每个线圈
 
+        # 6. 网络预测残差
         delta_pred = self.denoise_fn(model_in, t_in).permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
 
+        # 7. 计算损失
         if self.loss_type == 'l1':
             loss = F.l1_loss(delta_pred, delta_gt)
         elif self.loss_type == 'l2':

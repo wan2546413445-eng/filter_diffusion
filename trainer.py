@@ -214,15 +214,14 @@ class Trainer:
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
-            if self.step != 0 and self.step % self.save_and_sample_every == 0:
-                acc_loss = acc_loss / (self.save_and_sample_every + 1)
-                print(f'Mean LOSS of last {self.step}: {acc_loss:.6f}')
+            save_start_step = 6000
+            save_interval_after_start = 100
+
+            if self.step >= save_start_step and (self.step - save_start_step) % save_interval_after_start == 0:
+                print(f'Saving checkpoint at step {self.step}, acc_loss={acc_loss:.6f}')
                 acc_loss = 0
                 self.save(self.step)
-                if self.step % (self.save_and_sample_every * 100) == 0:
-                    self.save(self.step)
-
-        self.save(self.step + 1)
+        self.save(self.step)
         print('training completed')
 
     def test(self, t, num_samples=1):
