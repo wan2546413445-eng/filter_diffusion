@@ -114,14 +114,8 @@ class KspaceDiffusion(nn.Module):
         if t is None:
             t = self.num_timesteps
 
-        bsz = k_c.shape[0]
-        t_init = torch.full((bsz,), t, dtype=torch.long, device=k_c.device)
-        m_t = self.schedule.get_by_t(t_init, device=k_c.device, dtype=k_c.dtype)
-
-        # ensure conditional measurement obeys acquisition mask semantics (1=observed)
-        k_c = self._build_conditional_kc(k_c, mask)
-        # paper-consistent kc-only initialization: treat kc as terminal state seed
-        # (avoid extra degradation like k_T = M_T * kc).
+        # `k_c` is already the under-sampled conditional k-space produced by the
+        # caller. Do not apply the acquisition mask a second time here.
         k_t = k_c
 
         k_rec, direct_k = run_reverse_loop(
