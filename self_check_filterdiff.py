@@ -41,6 +41,7 @@ def main():
         loss_type="l1",
         schedule_type="dense",
         center_core_size=16,
+        use_explicit_dc=True,
     ).to(device)
 
     # Dummy complex k-space and acquisition mask (1=observed)

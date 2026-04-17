@@ -29,6 +29,7 @@ class KspaceDiffusion(nn.Module):
             loss_type='l1',
             schedule_type='dense',
             center_core_size=32,
+            use_explicit_dc=False,
             **kwargs,
     ):
         super().__init__()
@@ -40,6 +41,8 @@ class KspaceDiffusion(nn.Module):
         self.num_timesteps = int(timesteps)
         self.loss_type = loss_type
         self.lambda_img = 1.0
+        # paper-mainline default: no explicit DC projection in reverse loop
+        self.use_explicit_dc = use_explicit_dc
 
         self.schedule = CenterRectangleSchedule(
             h=image_size,
@@ -102,7 +105,7 @@ class KspaceDiffusion(nn.Module):
         """
         kc-only inference mode:
         - Input `k_c` is the under-sampled conditional k-space
-        - Reverse is initialized from k_T = M_T * k_c
+        - Reverse is initialized directly from k_T = k_c
 
         No full-sampled k0 is used inside sampling.
         """
@@ -117,8 +120,9 @@ class KspaceDiffusion(nn.Module):
 
         # ensure conditional measurement obeys acquisition mask semantics (1=observed)
         k_c = self._build_conditional_kc(k_c, mask)
-        # kc-only initialization of reverse chain
-        k_t = apply_filter_degradation(k_c, m_t)
+        # paper-consistent kc-only initialization: treat kc as terminal state seed
+        # (avoid extra degradation like k_T = M_T * kc).
+        k_t = k_c
 
         k_rec, direct_k = run_reverse_loop(
             model=self.denoise_fn,
@@ -127,6 +131,7 @@ class KspaceDiffusion(nn.Module):
             acq_mask=mask,
             schedule=self.schedule,
             timesteps=t,
+            use_explicit_dc=self.use_explicit_dc,
         )
 
         xt = fastmri.ifft2c(k_t)

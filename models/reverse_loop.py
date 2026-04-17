@@ -10,12 +10,14 @@ def run_reverse_loop(
     acq_mask,
     schedule,
     timesteps: int,
+    use_explicit_dc: bool = False,
 ):
     """
     for t = T ... 1:
       delta_k = model(k_t, k_c, M_t, t)
       k_pred  = k_t + delta_k
-      k_{t-1} = explicit_dc(k_pred, k_c, acq_mask)
+      k_{t-1} = k_pred                              # paper mainline
+      k_{t-1} = explicit_dc(k_pred, k_c, mask)     # optional engineering enhancement
     """
     cur_k = k_t
     direct_recons = None
@@ -40,6 +42,9 @@ def run_reverse_loop(
         if direct_recons is None:
             direct_recons = k_pred
 
-        cur_k = explicit_data_consistency(k_pred, k_c, acq_mask)
+        if use_explicit_dc:
+            cur_k = explicit_data_consistency(k_pred, k_c, acq_mask)
+        else:
+            cur_k = k_pred
 
     return cur_k, direct_recons
