@@ -126,7 +126,7 @@ def main():
         train_routine=config.training.train_routine,
         sampling_routine=config.training.sampling_routine,
         discrete=config.training.discrete,
-        schedule_type=getattr(config.training, 'filter_schedule_type', 'linear'),
+        schedule_type=getattr(config.training, 'filter_schedule_type', 'dense'),
         center_core_size=getattr(config.training, 'center_core_size', 32)
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架

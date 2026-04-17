@@ -39,7 +39,7 @@ def main():
         channels=2,
         timesteps=T,
         loss_type="l1",
-        schedule_type="linear",
+        schedule_type="dense",
         center_core_size=16,
     ).to(device)
 

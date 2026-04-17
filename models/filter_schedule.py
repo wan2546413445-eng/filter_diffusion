@@ -43,7 +43,7 @@ class CenterRectangleSchedule:
         w: int,
         timesteps: int,
         center_core_size: CoreSize,
-        schedule_type: str = "linear",
+        schedule_type: str = "dense",
     ):
         self.h = int(h)
         self.w = int(w)

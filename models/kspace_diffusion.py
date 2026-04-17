@@ -27,7 +27,7 @@ class KspaceDiffusion(nn.Module):
             channels=2,
             timesteps=100,
             loss_type='l1',
-            schedule_type='linear',
+            schedule_type='dense',
             center_core_size=32,
             **kwargs,
     ):
@@ -39,6 +39,7 @@ class KspaceDiffusion(nn.Module):
 
         self.num_timesteps = int(timesteps)
         self.loss_type = loss_type
+        self.lambda_img = 1.0
 
         self.schedule = CenterRectangleSchedule(
             h=image_size,
@@ -77,14 +78,24 @@ class KspaceDiffusion(nn.Module):
 
         delta_pred = self.denoise_fn(model_in, t_in).permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
 
+        # Paper-aligned minimal supervised objective:
+        # L = ||R_theta - delta_gt|| + lambda * ||phi_theta - x0||, lambda=1
+        # We reuse a single UNet head and derive phi_theta as image converted from
+        # k_{t-1} prediction: k_pred = k_t + delta_pred.
+        k_pred = k_t + delta_pred
+        x0 = fastmri.ifft2c(kspace)
+        x_pred = fastmri.ifft2c(k_pred)
+
         if self.loss_type == 'l1':
-            loss = F.l1_loss(delta_pred, delta_gt)
+            loss_delta = F.l1_loss(delta_pred, delta_gt)
+            loss_img = F.l1_loss(x_pred, x0)
         elif self.loss_type == 'l2':
-            loss = F.mse_loss(delta_pred, delta_gt)
+            loss_delta = F.mse_loss(delta_pred, delta_gt)
+            loss_img = F.mse_loss(x_pred, x0)
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
 
-        return loss
+        return loss_delta + self.lambda_img * loss_img
 
     @torch.no_grad()
     def sample(self, kspace: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
