@@ -258,12 +258,13 @@ class Trainer:
 
                 B, Nc, H, W, C = kspace.shape
                 gt_imgs = fastmri.ifft2c(kspace)  # [B,Nc,H,W,2]
+                k_c = kspace * mask.unsqueeze(-1)
 
                 if num_samples == 1:
-                    xt, direct_recons, sample_imgs = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                    xt, direct_recons, sample_imgs = self.ema_model.sample(k_c, mask, mask_fold, t=t)
                 else:
                     for i_sample in range(num_samples):
-                        xti, direct_reconsi, sample_imgsi = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                        xti, direct_reconsi, sample_imgsi = self.ema_model.sample(k_c, mask, mask_fold, t=t)
                         if i_sample == 0:
                             xt = xti
                             direct_recons = direct_reconsi
@@ -331,12 +332,13 @@ class Trainer:
 
             B, Nc, H, W, C = kspace.shape
             gt_imgs = fastmri.ifft2c(kspace)
+            k_c = kspace * mask.unsqueeze(-1)
 
             if num_samples == 1:
-                xt, direct_recons, sample_imgs = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                xt, direct_recons, sample_imgs = self.ema_model.sample(k_c, mask, mask_fold, t=t)
             else:
                 for i_sample in range(num_samples):
-                    xti, direct_reconsi, sample_imgsi = self.ema_model.sample(kspace, mask, mask_fold, t=t)
+                    xti, direct_reconsi, sample_imgsi = self.ema_model.sample(k_c, mask, mask_fold, t=t)
                     if i_sample == 0:
                         xt = xti
                         direct_recons = direct_reconsi

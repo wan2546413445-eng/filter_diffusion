@@ -141,7 +141,7 @@ def main():
     # ---------- minimal smoke ----------
     print("\n[5] Minimal smoke test")
     loss = model(kspace, mask, None)
-    xt, direct_recons, img = model.sample(kspace, mask, None, t=T)
+    xt, direct_recons, img = model.sample(k_c, mask, None, t=T)
     print("forward loss:", float(loss.item()))
     print_shape("xt", xt)
     if direct_recons is not None:

@@ -98,25 +98,27 @@ class KspaceDiffusion(nn.Module):
         return loss_delta + self.lambda_img * loss_img
 
     @torch.no_grad()
-    def sample(self, kspace: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
+    def sample(self, k_c: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
         """
-        Paired validation mode:
-        - `kspace` is full-sampled k0 from dataloader
-        - k_T is initialized by degrading k0 with M_t
+        kc-only inference mode:
+        - Input `k_c` is the under-sampled conditional k-space
+        - Reverse is initialized from k_T = M_T * k_c
 
-        This is NOT kc-only deployment inference.
+        No full-sampled k0 is used inside sampling.
         """
         self.denoise_fn.eval()
 
         if t is None:
             t = self.num_timesteps
 
-        bsz = kspace.shape[0]
-        t_init = torch.full((bsz,), t, dtype=torch.long, device=kspace.device)
-        m_t = self.schedule.get_by_t(t_init, device=kspace.device, dtype=kspace.dtype)
+        bsz = k_c.shape[0]
+        t_init = torch.full((bsz,), t, dtype=torch.long, device=k_c.device)
+        m_t = self.schedule.get_by_t(t_init, device=k_c.device, dtype=k_c.dtype)
 
-        k_t = apply_filter_degradation(kspace, m_t)
-        k_c = self._build_conditional_kc(kspace, mask)
+        # ensure conditional measurement obeys acquisition mask semantics (1=observed)
+        k_c = self._build_conditional_kc(k_c, mask)
+        # kc-only initialization of reverse chain
+        k_t = apply_filter_degradation(k_c, m_t)
 
         k_rec, direct_k = run_reverse_loop(
             model=self.denoise_fn,
