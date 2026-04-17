@@ -1,4 +1,3 @@
-# models/kspace_diffusion.py
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -20,18 +19,18 @@ class KspaceDiffusion(nn.Module):
     """
 
     def __init__(
-            self,
-            denoise_fn,
-            *,
-            image_size,
-            device_of_kernel,
-            channels=2,
-            timesteps=100,
-            loss_type='l1',
-            schedule_type='dense',
-            center_core_size=32,
-            use_explicit_dc=False,
-            **kwargs,
+        self,
+        denoise_fn,
+        *,
+        image_size,
+        device_of_kernel,
+        channels=2,
+        timesteps=100,
+        loss_type='l1',
+        schedule_type='dense',
+        center_core_size=32,
+        use_explicit_dc=False,
+        **kwargs,
     ):
         super().__init__()
         self.channels = channels
@@ -55,12 +54,16 @@ class KspaceDiffusion(nn.Module):
 
     def _build_conditional_kc(self, kspace: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
-        kspace: [B,Nc,H,W,2]
-        mask:   [B,1,H,W]
+        kspace: [B, Nc, H, W, 2]
+        mask:   [B, 1, H, W]
         """
         return kspace * mask.unsqueeze(-1)
 
     def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Paper-aligned minimal supervised objective:
+        L = ||delta_pred - delta_gt|| + lambda * ||x_pred - x0||, lambda = 1
+        """
         bsz, ncoil, h, w, _ = kspace.shape
 
         m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
@@ -77,15 +80,12 @@ class KspaceDiffusion(nn.Module):
         kc_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
         mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
 
-        model_in = torch.cat([kt_in, kc_in, mt_in], dim=1)  # [B*Nc,5,H,W]
+        model_in = torch.cat([kt_in, kc_in, mt_in], dim=1)  # [B*Nc, 5, H, W]
         t_in = t.repeat_interleave(ncoil)
 
         delta_pred = self.denoise_fn(model_in, t_in).permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
 
-        # Paper-aligned minimal supervised objective:
-        # L = ||R_theta - delta_gt|| + lambda * ||phi_theta - x0||, lambda=1
-        # We reuse a single UNet head and derive phi_theta as image converted from
-        # k_{t-1} prediction: k_pred = k_t + delta_pred.
+        # k_{t-1} prediction
         k_pred = k_t + delta_pred
         x0 = fastmri.ifft2c(kspace)
         x_pred = fastmri.ifft2c(k_pred)
@@ -115,14 +115,8 @@ class KspaceDiffusion(nn.Module):
         if t is None:
             t = self.num_timesteps
 
-        bsz = k_c.shape[0]
-        t_init = torch.full((bsz,), t, dtype=torch.long, device=k_c.device)
-        m_t = self.schedule.get_by_t(t_init, device=k_c.device, dtype=k_c.dtype)
-
-        # ensure conditional measurement obeys acquisition mask semantics (1=observed)
-        k_c = self._build_conditional_kc(k_c, mask)
-        # paper-consistent kc-only initialization: treat kc as terminal state seed
-        # (avoid extra degradation like k_T = M_T * kc).
+        # `k_c` is already the under-sampled conditional k-space produced by the
+        # caller. Do not apply the acquisition mask a second time here.
         k_t = k_c
 
         k_rec, direct_k = run_reverse_loop(
