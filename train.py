@@ -11,7 +11,7 @@ from utils.sample_mask import RandomMaskGaussianDiffusion, RandomMaskDiffusion, 
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from trainer import Trainer
-
+from models.restoration_net_filterdiff import build_filterdiff_restoration_net
 
 def main():
     parser = argparse.ArgumentParser()
@@ -104,29 +104,35 @@ def main():
         test_loader = None
 
     # 构建去噪网络
-    denoise_fn = Unet(
-        dim=config.model.dim,
-        out_dim=2,
-        channels=5,
-        dim_mults=tuple(config.model.dim_mults),
-        with_time_emb=True,
-        residual=config.model.residual
-    ).to(device)
+    backbone = getattr(config.model, 'backbone', 'unet')
 
-    '''
-    denoise_fn = build_filterdiff_restoration_net(
-        img_size=config.data.image_size,
-        patch_size=4,
-        in_channels=5,
-        out_channels=2,
-        hidden_size=384,
-        depth=8,
-        num_heads=8,
-        window_size=8,
-        mlp_ratio=4.0,
-        with_time_emb=True,
-    ).to(device)
-    '''
+    if backbone == 'unet':
+        denoise_fn = Unet(
+            dim=config.model.dim,
+            out_dim=2,
+            channels=5,
+            dim_mults=tuple(config.model.dim_mults),
+            with_time_emb=True,
+            residual=config.model.residual
+        ).to(device)
+
+    elif backbone == 'swin_dits':
+        denoise_fn = build_filterdiff_restoration_net(
+            img_size=config.data.image_size,
+            patch_size=getattr(config.model, 'patch_size', 4),
+            in_channels=5,
+            out_channels=2,
+            hidden_size=getattr(config.model, 'hidden_size', 384),
+            depth=getattr(config.model, 'depth', 8),
+            num_heads=getattr(config.model, 'num_heads', 8),
+            window_size=getattr(config.model, 'window_size', 8),
+            mlp_ratio=getattr(config.model, 'mlp_ratio', 4.0),
+            with_time_emb=True,
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported backbone: {backbone}")
+
+
     # 构建扩散模型
     # r_min should align with acquisition center_fraction by default.
     center_core_size = getattr(
