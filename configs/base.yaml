@@ -5,7 +5,7 @@ data:
   dataset_name: fastMRI_knee
   image_size: 320
   R: 4
-  mask_type: gaussian_diffusion   # gaussian_diffusion, random_diffusion, equispace_diffusion
+  mask_type: 'dense'  # 修改为 'dense' 或 'linear' 或 'sparse'
   center_fraction: 0.08
   patch_size: 4
   seed: 42
