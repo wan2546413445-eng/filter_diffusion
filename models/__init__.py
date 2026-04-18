@@ -1,7 +1,7 @@
-from .kspace_diffusion import KspaceDiffusion
 from .unet_diffusion import Unet
+from .restoration_net_filterdiff import build_filterdiff_restoration_net
 
 __all__ = [
-    'KspaceDiffusion',
-    'Unet',
+    "Unet",
+    "build_filterdiff_restoration_net",
 ]

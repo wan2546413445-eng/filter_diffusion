@@ -14,7 +14,6 @@ from collections import OrderedDict
 
 from utils.diffusion_utils import cycle, EMA, loss_backwards
 from utils.evaluation import calc_nmse_tensor, calc_psnr_tensor, calc_ssim_tensor
-from utils.misc import create_path
 
 
 def create_folder(path):

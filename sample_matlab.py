@@ -8,7 +8,7 @@ import torch
 import yaml
 from tqdm import tqdm
 
-from models.kspace_diffusion import KspaceDiffusion
+from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from utils.data_transform import DataTransform_Diffusion
 from utils.mri_data import SliceDataset

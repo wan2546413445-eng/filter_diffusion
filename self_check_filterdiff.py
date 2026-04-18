@@ -8,8 +8,8 @@ Run (in an environment with torch + fastmri):
 import torch
 
 from models.unet_diffusion import Unet
-from models.kspace_diffusion import KspaceDiffusion
-from models.dc import explicit_data_consistency
+from diffusion.kspace_diffusion import KspaceDiffusion
+from diffusion.dc import explicit_data_consistency
 
 
 def print_shape(name, x):

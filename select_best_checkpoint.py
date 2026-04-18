@@ -19,7 +19,7 @@ from utils.sample_mask import (
     RandomMaskDiffusion,
     EquiSpaceMaskDiffusion,
 )
-from models.kspace_diffusion import KspaceDiffusion
+from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 
 

@@ -1,16 +1,14 @@
 # train.py
-import os
 import argparse
 import yaml
 import torch
 from torch.utils.data import DataLoader
 import pathlib
-
 from utils.utils import dict2namespace, setup_seed
 from utils.mri_data import SliceDataset
 from utils.data_transform import DataTransform_Diffusion
 from utils.sample_mask import RandomMaskGaussianDiffusion, RandomMaskDiffusion, EquiSpaceMaskDiffusion
-from models.kspace_diffusion import KspaceDiffusion
+from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from trainer import Trainer
 
@@ -114,6 +112,21 @@ def main():
         with_time_emb=True,
         residual=config.model.residual
     ).to(device)
+
+    '''
+    denoise_fn = build_filterdiff_restoration_net(
+        img_size=config.data.image_size,
+        patch_size=4,
+        in_channels=5,
+        out_channels=2,
+        hidden_size=384,
+        depth=8,
+        num_heads=8,
+        window_size=8,
+        mlp_ratio=4.0,
+        with_time_emb=True,
+    ).to(device)
+    '''
     # 构建扩散模型
     # r_min should align with acquisition center_fraction by default.
     center_core_size = getattr(

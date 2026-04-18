@@ -1,7 +1,7 @@
 import torch
 import fastmri
 
-from .dc import explicit_data_consistency
+from diffusion.dc import explicit_data_consistency
 
 
 def run_reverse_loop(
