@@ -122,13 +122,9 @@ def main():
         channels=2,
         timesteps=config.training.timesteps,
         loss_type=config.training.loss_type,
-        blur_routine=config.training.blur_routine,
-        train_routine=config.training.train_routine,
-        sampling_routine=config.training.sampling_routine,
-        discrete=config.training.discrete,
         schedule_type=getattr(config.training, 'filter_schedule_type', 'dense'),
         center_core_size=getattr(config.training, 'center_core_size', 32),
-        use_explicit_dc=getattr(config.training, 'use_explicit_dc', False)
+        use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架
     # 创建 Trainer

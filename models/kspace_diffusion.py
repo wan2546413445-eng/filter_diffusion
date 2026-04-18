@@ -41,6 +41,7 @@ class KspaceDiffusion(nn.Module):
         self.num_timesteps = int(timesteps)
         self.loss_type = loss_type
         self.lambda_img = 1.0
+        self.lambda_dc = kwargs.get("lambda_dc", 0.5)
         # paper-mainline default: no explicit DC projection in reverse loop
         self.use_explicit_dc = use_explicit_dc
 
@@ -89,16 +90,23 @@ class KspaceDiffusion(nn.Module):
         x0 = fastmri.ifft2c(kspace)
         x_pred = fastmri.ifft2c(k_pred)
 
+        # 观测一致性：只在已采样位置上约束
+        mask_expanded = mask.unsqueeze(1).unsqueeze(-1)  # [B,1,H,W,1] -> broadcast 到 [B,Nc,H,W,2]
+        k_pred_obs = k_pred * mask_expanded
+        k_c_obs = k_c
+
         if self.loss_type == 'l1':
             loss_delta = F.l1_loss(delta_pred, delta_gt)
             loss_img = F.l1_loss(x_pred, x0)
+            loss_dc = F.l1_loss(k_pred_obs, k_c_obs)
         elif self.loss_type == 'l2':
             loss_delta = F.mse_loss(delta_pred, delta_gt)
             loss_img = F.mse_loss(x_pred, x0)
+            loss_dc = F.mse_loss(k_pred_obs, k_c_obs)
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
 
-        return loss_delta + self.lambda_img * loss_img
+        return loss_delta + self.lambda_img * loss_img + self.lambda_dc * loss_dc
 
     @torch.no_grad()
     def sample(self, k_c: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):

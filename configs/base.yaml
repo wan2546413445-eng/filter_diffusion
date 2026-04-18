@@ -39,22 +39,21 @@ model:
   dim_mults: [1, 2, 4, 8]
   residual: False
 
+
 training:
-  batch_size: 4
-
-  lr: 2e-5
-
-  timesteps: 100
+  timesteps: 20
   loss_type: l1
-  blur_routine: Constant
-  train_routine: Final
-  sampling_routine: x0_step_down
-  discrete: False
-  ema_decay: 0.995
-  train_num_steps: 50000  #  原本是2000
-  gradient_accumulate_every: 2
+  batch_size: 8
+  lambda_dc: 0.5
+  lr: 1e-4
+  train_num_steps: 10000
+  gradient_accumulate_every: 1
   fp16: False
-  step_start_ema: 5000
+  ema_decay: 0.995
+  step_start_ema: 1000
   update_ema_every: 10
   save_and_sample_every: 1000
-  results_folder: './results_1'
+  results_folder: './results_filterdiff_dc_1'
+  filter_schedule_type: dense
+  center_core_size: 32
+  use_explicit_dc: True
