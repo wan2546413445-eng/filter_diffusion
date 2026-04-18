@@ -5,9 +5,19 @@ import torch.nn.functional as F
 import fastmri
 
 from .filter_schedule import CenterRectangleSchedule
-from .degradation import apply_filter_degradation
+
 from .delta_target import build_delta_target
 from .reverse_loop import run_reverse_loop
+from mask.sample_mask import apply_filter_schedule
+from mask.sample_mask import generate_mask
+def apply_filter_degradation(kspace, t, schedule_type="dense"):
+    filter_ratio = apply_filter_schedule(t, schedule_type)
+
+    # 使用 filter_ratio 来生成当前的 mask
+    # 假设我们有一些预定义的 mask 生成方式
+    mask = generate_mask(kspace.shape, filter_ratio)
+
+    return kspace * mask
 
 
 class KspaceDiffusion(nn.Module):
@@ -149,5 +159,11 @@ class KspaceDiffusion(nn.Module):
             f'height and width of image must be {self.image_size}'
         )
 
+        # 随机选择时间步
         t = torch.randint(1, self.num_timesteps + 1, (bsz,), device=kspace.device).long()
-        return self.p_losses(kspace, mask, t)
+
+        # 使用 apply_filter_degradation 来生成退化后的 k_c
+        k_c = apply_filter_degradation(kspace, t, schedule_type="dense")  # 或者根据需求选择 "linear" 或 "sparse"
+
+        # 调用 p_losses 来进行模型的损失计算
+        return self.p_losses(kspace, mask, t, k_c)
