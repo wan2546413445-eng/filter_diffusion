@@ -22,17 +22,18 @@ class KspaceDiffusion(nn.Module):
     """
 
     def __init__(
-        self,
-        denoise_fn,
-        *,
-        image_size,
-        device_of_kernel,
-        channels=2,
-        timesteps=20,
-        loss_type='l1',
-        schedule_type='dense',
-        center_core_size=32,
-        **kwargs,
+            self,
+            denoise_fn,
+            *,
+            image_size,
+            device_of_kernel,
+            channels=2,
+            timesteps=20,
+            loss_type='l1',
+            schedule_type='dense',
+            center_core_size=32,
+            use_explicit_dc=False,
+            **kwargs,
     ):
         super().__init__()
         self.channels = channels
@@ -43,6 +44,7 @@ class KspaceDiffusion(nn.Module):
         self.num_timesteps = int(timesteps)
         self.loss_type = loss_type
         self.lambda_img = float(kwargs.get("lambda_img", 1.0))
+        self.use_explicit_dc = bool(use_explicit_dc)
 
         self.schedule = CenterRectangleSchedule(
             h=image_size,
@@ -51,7 +53,6 @@ class KspaceDiffusion(nn.Module):
             center_core_size=center_core_size,
             schedule_type=schedule_type,
         )
-
     def _build_conditional_kc(self, kspace: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         kspace: [B,Nc,H,W,2]
@@ -139,10 +140,11 @@ class KspaceDiffusion(nn.Module):
             model=self.denoise_fn,
             k_t=k_t,
             k_c=k_c,
+            acq_mask=mask,
             schedule=self.schedule,
             timesteps=t,
+            use_explicit_dc=self.use_explicit_dc,
         )
-
         xt = fastmri.ifft2c(k_t)
         direct_recons = fastmri.ifft2c(direct_k) if direct_k is not None else None
         img = fastmri.ifft2c(k0_rec)

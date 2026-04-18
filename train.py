@@ -131,6 +131,7 @@ def main():
         schedule_type=getattr(config.training, 'filter_schedule_type', 'dense'),
         center_core_size=center_core_size,
         lambda_img=getattr(config.training, 'lambda_img', 1.0),
+        use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架
     # 创建 Trainer
