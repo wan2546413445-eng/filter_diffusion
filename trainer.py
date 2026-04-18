@@ -100,7 +100,6 @@ def unpack_batch(batch):
         raise TypeError("Batch must be list/tuple.")
     return kspace, mask, mask_fold, maps
 
-
 class Trainer:
     def __init__(
             self,
@@ -120,6 +119,10 @@ class Trainer:
             load_path=None,
             dataloader_train=None,
             dataloader_test=None,
+            val_every=500,
+            early_stop_patience=10,
+            early_stop_min_delta=1e-4,
+            monitor_metric='psnr',
     ):
         super().__init__()
         self.model = diffusion_model
@@ -146,6 +149,17 @@ class Trainer:
         self.results_folder.mkdir(exist_ok=True)
 
         self.fp16 = fp16
+
+        self.val_every = val_every
+        self.early_stop_patience = early_stop_patience
+        self.early_stop_min_delta = early_stop_min_delta
+        self.monitor_metric = monitor_metric.lower()
+
+        if self.monitor_metric not in ['psnr', 'ssim', 'nmse']:
+            raise ValueError(f"Unsupported monitor_metric: {self.monitor_metric}")
+
+        self.best_metric = -float('inf') if self.monitor_metric in ['psnr', 'ssim'] else float('inf')
+        self.no_improve_count = 0
 
         self.reset_parameters()
 
@@ -178,27 +192,77 @@ class Trainer:
         self.step = data['step']
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
+    @torch.no_grad()
+    def validate(self, t):
+        if self.dataloader_test is None:
+            return None
+
+        self.ema_model.eval()
+        self.ema_model.training = False
+
+        nmse = 0.0
+        psnr = 0.0
+        ssim = 0.0
+
+        for batch in self.dataloader_test:
+            kspace, mask, mask_fold, maps = unpack_batch(batch)
+
+            kspace = kspace.cuda()
+            mask = mask.cuda()
+            mask_fold = mask_fold.cuda()
+            if maps is not None:
+                maps = maps.cuda()
+
+            B, Nc, H, W, C = kspace.shape
+            gt_imgs = fastmri.ifft2c(kspace)
+            k_c = kspace * mask.unsqueeze(-1)
+
+            _, _, sample_imgs = self.ema_model.sample(k_c, mask, mask_fold, t=t)
+
+            gt_imgs_abs = eval_image_from_multicoil(gt_imgs, maps)
+            sample_imgs_abs = eval_image_from_multicoil(sample_imgs, maps)
+
+            nmseb = 0.0
+            psnrb = 0.0
+            ssimb = 0.0
+            for i in range(B):
+                nmseb += calc_nmse_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
+                psnrb += calc_psnr_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
+                ssimb += calc_ssim_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
+
+            nmse += nmseb / B
+            psnr += psnrb / B
+            ssim += ssimb / B
+
+        nmse /= len(self.dataloader_test)
+        psnr /= len(self.dataloader_test)
+        ssim /= len(self.dataloader_test)
+
+        self.ema_model.train()
+        return {
+            'nmse': float(nmse),
+            'psnr': float(psnr),
+            'ssim': float(ssim),
+        }
 
     def train(self):
         backwards = partial(loss_backwards, self.fp16)
 
-        acc_loss = 0
+        acc_loss = 0.0
         pbar = tqdm(range(self.train_num_steps), desc='LOSS')
+
         for step in pbar:
             self.step = step
-            u_loss = 0
+            u_loss = 0.0
 
             for _ in range(self.gradient_accumulate_every):
                 batch = next(self.dl)
                 kspace, mask, mask_fold, maps = unpack_batch(batch)
 
-
-
                 kspace = kspace.cuda()
                 mask = mask.cuda()
                 mask_fold = mask_fold.cuda()
 
-                # maps 训练阶段当前不用，但保留接口兼容
                 if maps is not None:
                     maps = maps.cuda()
 
@@ -206,8 +270,9 @@ class Trainer:
                 u_loss += loss.item()
                 backwards(loss / self.gradient_accumulate_every, self.opt)
 
-            pbar.set_description(f"Loss={u_loss / self.gradient_accumulate_every:.6f}")
-            acc_loss += u_loss / self.gradient_accumulate_every
+            train_loss = u_loss / self.gradient_accumulate_every
+            pbar.set_description(f"Loss={train_loss:.6f}")
+            acc_loss += train_loss
 
             self.opt.step()
             self.opt.zero_grad()
@@ -215,17 +280,62 @@ class Trainer:
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
+            # 常规保存
             if self.step != 0 and self.step % self.save_and_sample_every == 0:
-                acc_loss = acc_loss / (self.save_and_sample_every + 1)
-                print(f'Mean LOSS of last {self.step}: {acc_loss:.6f}')
-                acc_loss = 0
+                mean_loss = acc_loss / (self.save_and_sample_every + 1)
+                print(f"Mean LOSS of last {self.step}: {mean_loss:.6f}")
+                acc_loss = 0.0
                 self.save(self.step)
-                if self.step % (self.save_and_sample_every * 100) == 0:
-                    self.save(self.step)
+
+            # 在线验证 + best ckpt + early stopping
+            if self.dataloader_test is not None and self.step != 0 and self.step % self.val_every == 0:
+                metrics = self.validate(t=self.model.num_timesteps)
+                cur_metric = metrics[self.monitor_metric]
+
+                print(
+                    f"[VAL @ step {self.step}] "
+                    f"PSNR={metrics['psnr']:.6f} | "
+                    f"SSIM={metrics['ssim']:.6f} | "
+                    f"NMSE={metrics['nmse']:.6f}"
+                )
+
+                improved = False
+                if self.monitor_metric in ['psnr', 'ssim']:
+                    improved = cur_metric > (self.best_metric + self.early_stop_min_delta)
+                else:  # nmse 越小越好
+                    improved = cur_metric < (self.best_metric - self.early_stop_min_delta)
+
+                if improved:
+                    self.best_metric = cur_metric
+                    self.no_improve_count = 0
+
+                    data = {
+                        'step': self.step,
+                        'model': self.model.state_dict(),
+                        'ema': self.ema_model.state_dict(),
+                        'best_metric': self.best_metric,
+                        'monitor_metric': self.monitor_metric,
+                        'val_metrics': metrics,
+                    }
+                    torch.save(data, str(self.results_folder / 'best.pt'))
+                    print(f"[BEST] step={self.step} | {self.monitor_metric}={self.best_metric:.6f}")
+                else:
+                    self.no_improve_count += 1
+                    print(
+                        f"[NO IMPROVEMENT] count={self.no_improve_count}/"
+                        f"{self.early_stop_patience}"
+                    )
+
+                    if self.no_improve_count >= self.early_stop_patience:
+                        print(
+                            f"[EARLY STOP] step={self.step} | "
+                            f"best {self.monitor_metric}={self.best_metric:.6f}"
+                        )
+                        self.save(self.step)
+                        return
 
         self.save(self.step + 1)
         print('training completed')
-
     def test(self, t, num_samples=1):
         if self.dataloader_test is None:
             print("No test dataloader provided.")

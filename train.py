@@ -151,8 +151,11 @@ def main():
         load_path=args.ckpt if args.mode == 'test' else None,
         dataloader_train=train_loader,
         dataloader_test=test_loader,
+        val_every=int(getattr(config.training, 'val_every', 500)),
+        early_stop_patience=int(getattr(config.training, 'early_stop_patience', 10)),
+        early_stop_min_delta=float(getattr(config.training, 'early_stop_min_delta', 1e-4)),
+        monitor_metric=str(getattr(config.training, 'monitor_metric', 'psnr')),
     )
-
     if args.mode == 'train':
         trainer.train()
     elif args.mode == 'test':
