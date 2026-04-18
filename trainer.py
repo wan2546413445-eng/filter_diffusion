@@ -58,7 +58,6 @@ def sense_combine(coil_imgs: torch.Tensor, maps: torch.Tensor, eps: float = 1e-8
     den = complex_abs_sq(maps).sum(dim=1).unsqueeze(-1) + eps                    # [B,H,W,1]
     return num / den
 
-
 def eval_image_from_multicoil(coil_imgs: torch.Tensor, maps: torch.Tensor = None) -> torch.Tensor:
     """
     统一评估口径，兼容：
@@ -77,9 +76,8 @@ def eval_image_from_multicoil(coil_imgs: torch.Tensor, maps: torch.Tensor = None
         if img_abs.shape[1] == 1:
             img_abs = img_abs[:, 0]                   # [B,H,W]
         else:
-            img_abs = torch.mean(img_abs, dim=1)      # [B,H,W]
+            img_abs = fastmri.rss(img_abs, dim=1)     # [B,H,W]
     return img_abs
-
 
 def unpack_batch(batch):
     """
@@ -98,6 +96,7 @@ def unpack_batch(batch):
     else:
         raise TypeError("Batch must be list/tuple.")
     return kspace, mask, mask_fold, maps
+
 
 class Trainer:
     def __init__(
@@ -122,6 +121,7 @@ class Trainer:
             early_stop_patience=10,
             early_stop_min_delta=1e-4,
             monitor_metric='psnr',
+            max_val_batches=None,
     ):
         super().__init__()
         self.model = diffusion_model
@@ -149,10 +149,11 @@ class Trainer:
 
         self.fp16 = fp16
 
-        self.val_every = val_every
-        self.early_stop_patience = early_stop_patience
-        self.early_stop_min_delta = early_stop_min_delta
+        self.val_every = int(val_every)
+        self.early_stop_patience = int(early_stop_patience)
+        self.early_stop_min_delta = float(early_stop_min_delta)
         self.monitor_metric = monitor_metric.lower()
+        self.max_val_batches = None if max_val_batches is None else int(max_val_batches)
 
         if self.monitor_metric not in ['psnr', 'ssim', 'nmse']:
             raise ValueError(f"Unsupported monitor_metric: {self.monitor_metric}")
@@ -161,6 +162,9 @@ class Trainer:
         self.no_improve_count = 0
 
         self.reset_parameters()
+        self.model = diffusion_model
+        self.device = next(self.model.parameters()).device
+        self.ema = EMA(ema_decay)
 
         if load_path is not None:
             self.load(load_path)
@@ -191,6 +195,7 @@ class Trainer:
         self.step = data['step']
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
+
     @torch.no_grad()
     def validate(self, t):
         if self.dataloader_test is None:
@@ -202,15 +207,25 @@ class Trainer:
         nmse = 0.0
         psnr = 0.0
         ssim = 0.0
+        num_eval_batches = 0
 
-        for batch in self.dataloader_test:
+        total_eval = len(self.dataloader_test)
+        if self.max_val_batches is not None:
+            total_eval = min(total_eval, self.max_val_batches)
+
+        pbar = tqdm(total=total_eval, desc='VAL', leave=False)
+
+        for batch_idx, batch in enumerate(self.dataloader_test):
+            if self.max_val_batches is not None and batch_idx >= self.max_val_batches:
+                break
+
             kspace, mask, mask_fold, maps = unpack_batch(batch)
 
-            kspace = kspace.cuda()
-            mask = mask.cuda()
-            mask_fold = mask_fold.cuda()
+            kspace = kspace.to(self.device)
+            mask = mask.to(self.device)
+            mask_fold = mask_fold.to(self.device)
             if maps is not None:
-                maps = maps.cuda()
+                maps = maps.to(self.device)
 
             B, Nc, H, W, C = kspace.shape
             gt_imgs = fastmri.ifft2c(kspace)
@@ -232,10 +247,18 @@ class Trainer:
             nmse += nmseb / B
             psnr += psnrb / B
             ssim += ssimb / B
+            num_eval_batches += 1
+            pbar.update(1)
 
-        nmse /= len(self.dataloader_test)
-        psnr /= len(self.dataloader_test)
-        ssim /= len(self.dataloader_test)
+        pbar.close()
+
+        if num_eval_batches == 0:
+            self.ema_model.train()
+            return None
+
+        nmse /= num_eval_batches
+        psnr /= num_eval_batches
+        ssim /= num_eval_batches
 
         self.ema_model.train()
         return {
@@ -258,12 +281,12 @@ class Trainer:
                 batch = next(self.dl)
                 kspace, mask, mask_fold, maps = unpack_batch(batch)
 
-                kspace = kspace.cuda()
-                mask = mask.cuda()
-                mask_fold = mask_fold.cuda()
+                kspace = kspace.to(self.device)
+                mask = mask.to(self.device)
+                mask_fold = mask_fold.to(self.device)
 
                 if maps is not None:
-                    maps = maps.cuda()
+                    maps = maps.to(self.device)
 
                 loss = self.model(kspace, mask, mask_fold)
                 u_loss += loss.item()
@@ -279,16 +302,18 @@ class Trainer:
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
-            # 常规保存
             if self.step != 0 and self.step % self.save_and_sample_every == 0:
                 mean_loss = acc_loss / (self.save_and_sample_every + 1)
                 print(f"Mean LOSS of last {self.step}: {mean_loss:.6f}")
                 acc_loss = 0.0
                 self.save(self.step)
 
-            # 在线验证 + best ckpt + early stopping
             if self.dataloader_test is not None and self.step != 0 and self.step % self.val_every == 0:
                 metrics = self.validate(t=self.model.num_timesteps)
+                if metrics is None:
+                    print(f"[VAL @ step {self.step}] skipped (no validation batches)")
+                    continue
+
                 cur_metric = metrics[self.monitor_metric]
 
                 print(
@@ -301,7 +326,7 @@ class Trainer:
                 improved = False
                 if self.monitor_metric in ['psnr', 'ssim']:
                     improved = cur_metric > (self.best_metric + self.early_stop_min_delta)
-                else:  # nmse 越小越好
+                else:
                     improved = cur_metric < (self.best_metric - self.early_stop_min_delta)
 
                 if improved:
@@ -335,6 +360,7 @@ class Trainer:
 
         self.save(self.step + 1)
         print('training completed')
+
     def test(self, t, num_samples=1):
         if self.dataloader_test is None:
             print("No test dataloader provided.")
@@ -360,14 +386,14 @@ class Trainer:
                 batch = next(self.dl_test)
                 kspace, mask, mask_fold, maps = unpack_batch(batch)
 
-                kspace = kspace.cuda()
-                mask = mask.cuda()
-                mask_fold = mask_fold.cuda()
+                kspace = kspace.to(self.device)
+                mask = mask.to(self.device)
+                mask_fold = mask_fold.to(self.device)
                 if maps is not None:
-                    maps = maps.cuda()
+                    maps = maps.to(self.device)
 
                 B, Nc, H, W, C = kspace.shape
-                gt_imgs = fastmri.ifft2c(kspace)  # [B,Nc,H,W,2]
+                gt_imgs = fastmri.ifft2c(kspace)
                 k_c = kspace * mask.unsqueeze(-1)
 
                 if num_samples == 1:
@@ -384,8 +410,8 @@ class Trainer:
                             direct_recons = torch.cat((direct_recons, direct_reconsi), dim=1)
                             sample_imgs = torch.cat((sample_imgs, sample_imgsi), dim=1)
 
-                gt_imgs_abs = eval_image_from_multicoil(gt_imgs, maps)           # [B,H,W]
-                sample_imgs_abs = eval_image_from_multicoil(sample_imgs, maps)   # [B,H,W]
+                gt_imgs_abs = eval_image_from_multicoil(gt_imgs, maps)
+                sample_imgs_abs = eval_image_from_multicoil(sample_imgs, maps)
 
                 nmseb = 0
                 psnrb = 0
@@ -434,11 +460,11 @@ class Trainer:
 
             kspace, mask, mask_fold, maps = unpack_batch(batch)
 
-            kspace = kspace.cuda()
-            mask = mask.cuda()
-            mask_fold = mask_fold.cuda()
+            kspace = kspace.to(self.device)
+            mask = mask.to(self.device)
+            mask_fold = mask_fold.to(self.device)
             if maps is not None:
-                maps = maps.cuda()
+                maps = maps.to(self.device)
 
             B, Nc, H, W, C = kspace.shape
             gt_imgs = fastmri.ifft2c(kspace)

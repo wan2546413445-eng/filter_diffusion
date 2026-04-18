@@ -199,7 +199,7 @@ class SliceDataset(torch.utils.data.Dataset):
                 for slice_ind in range(num_slices):
                     # skip boundary slices if indicated, added by Guoyao
                     if num_skip_slice is not None:
-                        if slice_ind < num_skip_slice or slice_ind > (num_slices-num_skip_slice):
+                        if slice_ind < num_skip_slice or slice_ind >= (num_slices - num_skip_slice):
                             continue
 
                     raw_sample = FastMRIRawDataSample(fname, slice_ind, metadata)
@@ -293,8 +293,8 @@ class SliceDataset(torch.utils.data.Dataset):
             attrs.update(metadata)
 
         if self.transform is None:
-            sample = (kspace, mask, target, attrs, fname.name, dataslice)
+            sample = (kspace, mask, target, attrs, str(fname), dataslice)
         else:
-            sample = self.transform(kspace, mask, target, attrs, fname.name, dataslice)
+            sample = self.transform(kspace, mask, target, attrs, str(fname), dataslice)
 
         return sample

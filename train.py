@@ -84,6 +84,23 @@ def main():
         num_workers=config.data.num_workers,
         pin_memory=False,
     )
+    # ====== 验证数据集 ======
+    if hasattr(config.data, 'val_root') and config.data.val_root:
+        val_dataset = SliceDataset(
+            root=pathlib.Path(config.data.val_root),
+            transform=data_transform,
+            challenge='multicoil',
+            num_skip_slice=num_skip_slice,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=config.data.num_workers,
+            pin_memory=False,
+        )
+    else:
+        val_loader = None
 
     # ====== 测试数据集 ======
     if hasattr(config.data, 'test_root') and config.data.test_root:
@@ -102,7 +119,6 @@ def main():
         )
     else:
         test_loader = None
-
     # 构建去噪网络
     backbone = getattr(config.model, 'backbone', 'unet')
 
@@ -169,7 +185,7 @@ def main():
         results_folder=config.training.results_folder,
         load_path=args.ckpt if args.mode == 'test' else None,
         dataloader_train=train_loader,
-        dataloader_test=test_loader,
+        dataloader_test=val_loader,
         val_every=int(getattr(config.training, 'val_every', 500)),
         early_stop_patience=int(getattr(config.training, 'early_stop_patience', 10)),
         early_stop_min_delta=float(getattr(config.training, 'early_stop_min_delta', 1e-4)),

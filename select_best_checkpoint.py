@@ -9,7 +9,6 @@ import yaml
 from tqdm import tqdm
 
 import fastmri
-from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from utils.utils import dict2namespace
 from utils.mri_data import SliceDataset
@@ -21,17 +20,44 @@ from utils.sample_mask import (
 )
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
-
+from models.restoration_net_filterdiff import build_filterdiff_restoration_net
+from trainer import eval_image_from_multicoil
+from utils.evaluation import calc_nmse_tensor, calc_psnr_tensor, calc_ssim_tensor
 
 def build_model(config, device):
-    denoise_fn = Unet(
-        dim=config.model.dim,
-        out_dim=2,
-        channels=5,  # [kt, kc, mt] -> 2 + 2 + 1 = 5
-        dim_mults=tuple(config.model.dim_mults),
-        with_time_emb=True,
-        residual=config.model.residual,
-    ).to(device)
+    backbone = getattr(config.model, "backbone", "unet")
+
+    if backbone == "unet":
+        denoise_fn = Unet(
+            dim=config.model.dim,
+            out_dim=2,
+            channels=5,  # [kt, kc, mt] -> 2 + 2 + 1 = 5
+            dim_mults=tuple(config.model.dim_mults),
+            with_time_emb=True,
+            residual=config.model.residual,
+        ).to(device)
+
+    elif backbone == "swin_dits":
+        denoise_fn = build_filterdiff_restoration_net(
+            img_size=config.data.image_size,
+            patch_size=getattr(config.model, "patch_size", 4),
+            in_channels=5,
+            out_channels=2,
+            hidden_size=getattr(config.model, "hidden_size", 384),
+            depth=getattr(config.model, "depth", 8),
+            num_heads=getattr(config.model, "num_heads", 8),
+            window_size=getattr(config.model, "window_size", 8),
+            mlp_ratio=getattr(config.model, "mlp_ratio", 4.0),
+            with_time_emb=True,
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported backbone: {backbone}")
+
+    center_core_size = getattr(
+        config.training,
+        "center_core_size",
+        [config.data.image_size, max(1, int(round(config.data.image_size * float(config.data.center_fraction))))]
+    )
 
     model = KspaceDiffusion(
         denoise_fn=denoise_fn,
@@ -41,12 +67,12 @@ def build_model(config, device):
         timesteps=config.training.timesteps,
         loss_type=config.training.loss_type,
         schedule_type=getattr(config.training, "filter_schedule_type", "dense"),
-        center_core_size=getattr(config.training, "center_core_size", 32),
+        center_core_size=center_core_size,
+        lambda_img=getattr(config.training, "lambda_img", 1.0),
         use_explicit_dc=getattr(config.training, "use_explicit_dc", False),
     ).to(device)
 
     return model
-
 
 def build_dataset(config, data_root):
     size = (1, config.data.image_size, config.data.image_size)
@@ -96,7 +122,6 @@ def build_dataset(config, data_root):
     )
     return dataset, combine_coil
 
-
 def evaluate_one_checkpoint(
     model,
     ckpt_path,
@@ -107,10 +132,14 @@ def evaluate_one_checkpoint(
     max_cases=None,
 ):
     ckpt = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(ckpt["ema"])
-    model.eval()
+    if "ema" in ckpt:
+        model.load_state_dict(ckpt["ema"])
+    elif "model" in ckpt:
+        model.load_state_dict(ckpt["model"])
+    else:
+        raise KeyError(f"Neither 'ema' nor 'model' found in checkpoint: {ckpt_path}")
 
-    ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
+    model.eval()
 
     total_psnr = 0.0
     total_ssim = 0.0
@@ -136,52 +165,21 @@ def evaluate_one_checkpoint(
             if maps is not None:
                 maps = maps.unsqueeze(0).to(device)
 
-            # 关键修正：sample 输入必须是 k_c，不是 full kspace
+            # sample 输入必须是 k_c
             k_c = kspace * mask.unsqueeze(-1)
             _, _, sample_imgs = model.sample(k_c, mask, mask_fold, t=t)
 
-            gt_abs = fastmri.complex_abs(fastmri.ifft2c(kspace))
-            recon_abs = fastmri.complex_abs(sample_imgs)
+            gt_imgs = fastmri.ifft2c(kspace)
 
-            if combine_coil:
-                # 这里先保持和你当前训练/评估逻辑一致，使用 mean over coils
-                gt_tensor = torch.mean(gt_abs, dim=1)[0].float()
-                recon_tensor = torch.mean(recon_abs, dim=1)[0].float()
-            else:
-                gt_tensor = gt_abs[0, 0].float()
-                recon_tensor = recon_abs[0, 0].float()
+            gt_abs = eval_image_from_multicoil(gt_imgs, maps)         # [B,H,W]
+            recon_abs = eval_image_from_multicoil(sample_imgs, maps)  # [B,H,W]
 
-            assert gt_tensor.shape == recon_tensor.shape, (
-                f"shape mismatch: {gt_tensor.shape} vs {recon_tensor.shape}"
-            )
-            assert torch.isfinite(gt_tensor).all() and torch.isfinite(recon_tensor).all(), (
-                "NaN or Inf found"
-            )
-
-            # 按你的要求：各自最大值归一化，不共享 GT
-            gt_scale = torch.clamp(gt_tensor.max(), min=1e-8)
-            recon_scale = torch.clamp(recon_tensor.max(), min=1e-8)
-
-            gt_eval = gt_tensor / gt_scale
-            recon_eval = recon_tensor / recon_scale
-
-            mse = torch.mean((gt_eval - recon_eval) ** 2)
-            psnr = 10 * torch.log10(1.0 / (mse + 1e-12))
-
-            ssim_metric.reset()
-            ssim = ssim_metric(
-                recon_eval.unsqueeze(0).unsqueeze(0),
-                gt_eval.unsqueeze(0).unsqueeze(0),
-            )
-
-            nmse = torch.linalg.norm((recon_eval - gt_eval).reshape(-1)) ** 2 / (
-                torch.linalg.norm(gt_eval.reshape(-1)) ** 2 + 1e-12
-            )
-
-            total_psnr += psnr.item()
-            total_ssim += ssim.item()
-            total_nmse += nmse.item()
-            total_count += 1
+            B = gt_abs.shape[0]
+            for i in range(B):
+                total_nmse += float(calc_nmse_tensor(gt_abs[i], recon_abs[i]))
+                total_psnr += float(calc_psnr_tensor(gt_abs[i], recon_abs[i]))
+                total_ssim += float(calc_ssim_tensor(gt_abs[i], recon_abs[i]))
+                total_count += 1
 
     return {
         "avg_psnr": total_psnr / total_count,

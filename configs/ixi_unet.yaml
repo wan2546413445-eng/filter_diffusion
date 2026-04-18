@@ -1,0 +1,48 @@
+seed: 42
+device: cuda
+
+data:
+  train_root: /mnt/SSD/wsy/data/train
+  val_root: /mnt/SSD/wsy/data/val
+  test_root: /mnt/SSD/wsy/data/test
+
+
+  image_size: 256
+  num_workers: 4
+  num_skip_slice: 10
+  normalize_mode: percentile
+
+  mask_type: equispace_diffusion
+  R: 4
+  center_fraction: 0.08
+  patch_size: 1
+
+model:
+  backbone: unet
+  dim: 64
+  dim_mults: [1, 2, 4, 8]
+  residual: False
+training:
+  timesteps: 20
+  loss_type: l1
+  batch_size: 8
+  lr: 1e-4
+  train_num_steps: 10000
+  gradient_accumulate_every: 1
+  fp16: False
+
+  ema_decay: 0.995
+  step_start_ema: 1000
+  update_ema_every: 10
+  save_and_sample_every: 500
+  results_folder: ./results_ixi_swin
+
+  filter_schedule_type: dense
+  center_core_size: 20
+  use_explicit_dc: True
+
+  val_every: 1000
+  max_val_batches: 100
+  early_stop_patience: 12
+  early_stop_min_delta: 0.002
+  monitor_metric: psnr
