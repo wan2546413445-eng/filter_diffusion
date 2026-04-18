@@ -1,10 +1,11 @@
 import math
 from typing import Tuple, Union
-
+from mask.sample_mask import apply_filter_schedule
 import torch
 
 
 CoreSize = Union[int, Tuple[int, int]]
+
 
 
 def _resolve_core_size(center_core_size: CoreSize, h: int, w: int) -> Tuple[int, int]:
@@ -17,17 +18,7 @@ def _resolve_core_size(center_core_size: CoreSize, h: int, w: int) -> Tuple[int,
     return core_h, core_w
 
 
-def _schedule_progress(t: int, timesteps: int, schedule_type: str) -> float:
-    if timesteps <= 0:
-        return 1.0
-    p = float(t) / float(timesteps)
-    if schedule_type == "linear":
-        return p
-    if schedule_type == "dense":
-        return math.sqrt(p)
-    if schedule_type == "sparse":
-        return p ** 2
-    raise ValueError(f"Unsupported schedule_type: {schedule_type}")
+
 
 
 class CenterRectangleSchedule:
@@ -58,7 +49,7 @@ class CenterRectangleSchedule:
         masks = []
 
         for t in range(self.timesteps + 1):
-            p = _schedule_progress(t, self.timesteps, self.schedule_type)
+            p = apply_filter_schedule(t, self.timesteps, self.schedule_type)
 
             cur_h = int(round(self.h - p * (self.h - core_h)))
             cur_w = int(round(self.w - p * (self.w - core_w)))

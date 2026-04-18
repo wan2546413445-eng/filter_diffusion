@@ -3,7 +3,9 @@ import torch
 import h5py
 import numpy as np
 import pickle
+import pathlib
 from torch.utils.data import Dataset
+from mask.sample_mask import RandomMaskFilterDiffusion
 from utils.utils import (
     get_all_files,
     fft2c_2d,
@@ -12,7 +14,6 @@ from utils.utils import (
     normalize_complex,
     normalize_l2,
 )
-from .sample_mask import RandomMaskGaussianDiffusion, RandomMaskDiffusion, EquiSpaceMaskDiffusion
 
 def crop_tensor(x, cropx, cropy):
     """
@@ -22,6 +23,8 @@ def crop_tensor(x, cropx, cropy):
     startx = W // 2 - cropx // 2
     starty = H // 2 - cropy // 2
     return x[:, :, starty:starty+cropy, startx:startx+cropx]
+
+
 
 class FastMRIKneeDataSet(Dataset):
     def __init__(self, config, mode):
@@ -46,33 +49,13 @@ class FastMRIKneeDataSet(Dataset):
         self.num_slices = np.array([max(slice_dict[os.path.basename(f)] - 6, 1) for f in self.file_list])
         self.slice_mapper = np.cumsum(self.num_slices) - 1
 
-        # 初始化掩码生成器
         size = (1, config.data.image_size, config.data.image_size)
-        mask_type = config.data.mask_type
-        if mask_type == 'gaussian_diffusion':
-            self.mask_gen = RandomMaskGaussianDiffusion(
-                acceleration=config.data.R,
-                center_fraction=config.data.center_fraction,
-                size=size,
-                seed=config.data.seed,
-                patch_size=config.data.patch_size
-            )
-        elif mask_type == 'random_diffusion':
-            self.mask_gen = RandomMaskDiffusion(
-                center_fraction=config.data.center_fraction,
-                acceleration=config.data.R,
-                size=size,
-                seed=config.data.seed
-            )
-        elif mask_type == 'equispace_diffusion':
-            self.mask_gen = EquiSpaceMaskDiffusion(
-                center_fraction=config.data.center_fraction,
-                acceleration=config.data.R,
-                size=size,
-                seed=config.data.seed
-            )
-        else:
-            raise ValueError(f"Unsupported mask_type: {mask_type}")
+        self.mask_func = RandomMaskFilterDiffusion(
+            size=size,
+            patch_size=config.data.patch_size,
+            seed=config.data.seed
+        )
+
 
     def __len__(self):
         return int(np.sum(self.num_slices))
@@ -126,17 +109,17 @@ class FastMRIKneeDataSet(Dataset):
                 img = img * (img_abs / torch.abs(img))        # 保持相位
                 kspace = fft2c_2d(img)
 
-            # 最终 kspace 为复数张量 (1, Nc, H, W)
-            kspace = kspace.squeeze(0)                        # (Nc, H, W)
+                # 最终 kspace 为复数张量 (1, Nc, H, W)
+            kspace = kspace.squeeze(0)  # (Nc, H, W)
 
-        # 生成掩码（numpy 数组）
-        mask, mask_fold = self.mask_gen()                     # mask: (1, H, W), mask_fold: (1, H//ps, W//ps)
+                # 生成掩码（numpy 数组）
+        t = torch.randint(1, self.config.training.timesteps + 1, (1,), device=self.device).long()
+        mask = self.mask_func(t, schedule_type="dense")  # 使用动态掩码生成器
 
-        # 将 kspace 转换为 (Nc, H, W, 2) 实部虚部分离的形式
+            # 将 kspace 转换为 (Nc, H, W, 2) 实部虚部分离的形式
         kspace_2c = torch.stack([kspace.real, kspace.imag], dim=-1)  # (Nc, H, W, 2)
 
-        # 转为 Tensor
+            # 转为 Tensor
         mask = torch.from_numpy(mask).float()
-        mask_fold = torch.from_numpy(mask_fold).float()
 
-        return kspace_2c, mask, mask_fold
+        return kspace_2c, mask
