@@ -208,9 +208,9 @@ def main():
         max_cases = 20
         save_csv = "filterdiff_ckpt_scan.csv"
         pattern = "model_*.pt"
-        stride = 1000
-        start_step = 1000
-        end_step = 50000
+        stride = 100
+        start_step = 100
+        end_step = 10000
 
     if len(sys.argv) == 1:
         args = DebugArgs()

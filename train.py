@@ -1,3 +1,4 @@
+# train.py
 import os
 import argparse
 import yaml
@@ -113,8 +114,13 @@ def main():
         with_time_emb=True,
         residual=config.model.residual
     ).to(device)
-
     # 构建扩散模型
+    # r_min should align with acquisition center_fraction by default.
+    center_core_size = getattr(
+        config.training,
+        'center_core_size',
+        [config.data.image_size, max(1, int(round(config.data.image_size * float(config.data.center_fraction))))]
+    )
     model = KspaceDiffusion(
         denoise_fn=denoise_fn,
         image_size=config.data.image_size,
@@ -123,8 +129,8 @@ def main():
         timesteps=config.training.timesteps,
         loss_type=config.training.loss_type,
         schedule_type=getattr(config.training, 'filter_schedule_type', 'dense'),
-        center_core_size=getattr(config.training, 'center_core_size', 32),
-        use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
+        center_core_size=center_core_size,
+        lambda_img=getattr(config.training, 'lambda_img', 1.0),
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架
     # 创建 Trainer

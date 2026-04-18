@@ -5,42 +5,34 @@ import torch.nn.functional as F
 import fastmri
 
 from .filter_schedule import CenterRectangleSchedule
-
 from .delta_target import build_delta_target
+from .degradation import apply_filter_degradation
 from .reverse_loop import run_reverse_loop
-from mask.sample_mask import apply_filter_schedule
-from mask.sample_mask import generate_mask
-def apply_filter_degradation(kspace, t, schedule_type="dense"):
-    filter_ratio = apply_filter_schedule(t, schedule_type)
-
-    # 使用 filter_ratio 来生成当前的 mask
-    # 假设我们有一些预定义的 mask 生成方式
-    mask = generate_mask(kspace.shape, filter_ratio)
-
-    return kspace * mask
 
 
 class KspaceDiffusion(nn.Module):
     """
-    FilterDiff-style lightweight supervised baseline:
-    - forward degradation: k_t = M_t * k_0
-    - target: delta_gt = (M_{t-1} - M_t) * k_0
-    - reverse: predict step-wise delta in k-space with explicit conditional kc + DC
+    FilterDiff-aligned implementation (except restoration network architecture):
+      Eq.6:  k_t = M_t ⊙ k_0
+      Eq.8:  L = ||Δk_pred - Δk_gt|| + λ ||x0_pred - x0||, λ=1
+             where Δk_pred = ΔM_{t-1} ⊙ FFT(x0_pred)
+      Eq.9:  k_{t-1} = k_t + Δk_t, deterministic reverse loop.
+
+    Network input channels are [k_t(2), k_c(2), M_t(1)] = 5 channels per coil.
     """
 
     def __init__(
-            self,
-            denoise_fn,
-            *,
-            image_size,
-            device_of_kernel,
-            channels=2,
-            timesteps=100,
-            loss_type='l1',
-            schedule_type='dense',
-            center_core_size=32,
-            use_explicit_dc=False,
-            **kwargs,
+        self,
+        denoise_fn,
+        *,
+        image_size,
+        device_of_kernel,
+        channels=2,
+        timesteps=20,
+        loss_type='l1',
+        schedule_type='dense',
+        center_core_size=32,
+        **kwargs,
     ):
         super().__init__()
         self.channels = channels
@@ -50,10 +42,7 @@ class KspaceDiffusion(nn.Module):
 
         self.num_timesteps = int(timesteps)
         self.loss_type = loss_type
-        self.lambda_img = 1.0
-        self.lambda_dc = kwargs.get("lambda_dc", 0.5)
-        # paper-mainline default: no explicit DC projection in reverse loop
-        self.use_explicit_dc = use_explicit_dc
+        self.lambda_img = float(kwargs.get("lambda_img", 1.0))
 
         self.schedule = CenterRectangleSchedule(
             h=image_size,
@@ -66,20 +55,17 @@ class KspaceDiffusion(nn.Module):
     def _build_conditional_kc(self, kspace: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         kspace: [B,Nc,H,W,2]
-        mask:   [B,1,H,W]
+        mask:   [B,1,H,W] or [B,H,W]
         """
-        return kspace * mask.unsqueeze(-1)
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+        # -> [B,1,H,W,1], broadcast on coil/channel dimensions
+        mask = mask.unsqueeze(-1)
+        return kspace * mask
 
-    def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        bsz, ncoil, h, w, _ = kspace.shape
-
-        m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
-        t_minus_1 = torch.clamp(t - 1, min=0)
-        m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
-
-        k_t = apply_filter_degradation(kspace, m_t)
-        k_c = self._build_conditional_kc(kspace, mask)
-        delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
+    def _run_backbone(self, k_t: torch.Tensor, k_c: torch.Tensor, m_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Return x0_pred in image domain, shape [B,Nc,H,W,2]."""
+        bsz, ncoil, h, w, _ = k_t.shape
 
         m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)
 
@@ -90,65 +76,76 @@ class KspaceDiffusion(nn.Module):
         model_in = torch.cat([kt_in, kc_in, mt_in], dim=1)  # [B*Nc,5,H,W]
         t_in = t.repeat_interleave(ncoil)
 
-        delta_pred = self.denoise_fn(model_in, t_in).permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
+        x0_pred = self.denoise_fn(model_in, t_in)
+        x0_pred = x0_pred.permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
+        return x0_pred
 
-        # Paper-aligned minimal supervised objective:
-        # L = ||R_theta - delta_gt|| + lambda * ||phi_theta - x0||, lambda=1
-        # We reuse a single UNet head and derive phi_theta as image converted from
-        # k_{t-1} prediction: k_pred = k_t + delta_pred.
-        k_pred = k_t + delta_pred
+    def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         x0 = fastmri.ifft2c(kspace)
-        x_pred = fastmri.ifft2c(k_pred)
 
-        # 观测一致性：只在已采样位置上约束
-        mask_expanded = mask.unsqueeze(1).unsqueeze(-1)  # [B,1,H,W,1] -> broadcast 到 [B,Nc,H,W,2]
-        k_pred_obs = k_pred * mask_expanded
-        k_c_obs = k_c
+        m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
+        t_minus_1 = torch.clamp(t - 1, min=0)
+        m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
+
+        delta_m = m_t_minus_1 - m_t
+
+        # Eq.6 forward degradation: k_t = M_t ⊙ k_0
+        k_t = apply_filter_degradation(kspace, m_t)
+
+        # Conditional input k_c (fixed under-sampled k-space)
+        k_c = self._build_conditional_kc(kspace, mask)
+
+        # Eq.8 Δk ground truth: ΔM_{t-1} ⊙ k_0
+        delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
+
+        # φθ output: x0_pred (image domain)
+        x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
+
+        # Eq.8 Rθ: Δk_pred = ΔM_{t-1} ⊙ FFT(x0_pred)
+        k0_pred = fastmri.fft2c(x0_pred)
+        delta_pred = delta_m * k0_pred
 
         if self.loss_type == 'l1':
             loss_delta = F.l1_loss(delta_pred, delta_gt)
-            loss_img = F.l1_loss(x_pred, x0)
-            loss_dc = F.l1_loss(k_pred_obs, k_c_obs)
+            loss_img = F.l1_loss(x0_pred, x0)
         elif self.loss_type == 'l2':
             loss_delta = F.mse_loss(delta_pred, delta_gt)
-            loss_img = F.mse_loss(x_pred, x0)
-            loss_dc = F.mse_loss(k_pred_obs, k_c_obs)
+            loss_img = F.mse_loss(x0_pred, x0)
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
 
-        return loss_delta + self.lambda_img * loss_img + self.lambda_dc * loss_dc
+        return loss_delta + self.lambda_img * loss_img
 
     @torch.no_grad()
     def sample(self, k_c: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
         """
-        kc-only inference mode:
-        - Input `k_c` is the under-sampled conditional k-space
-        - Reverse is initialized directly from k_T = k_c
-
-        No full-sampled k0 is used inside sampling.
+        Input: conditional under-sampled k-space k_c and acquisition mask.
+        Eq.9 initialization: k_T = M_T ⊙ k_c.
+        Returns final reconstruction image from k_0.
         """
         self.denoise_fn.eval()
 
         if t is None:
             t = self.num_timesteps
 
-        # `k_c` is already the under-sampled conditional k-space produced by the
-        # caller. Do not apply the acquisition mask a second time here.
-        k_t = k_c
+        bsz = k_c.shape[0]
+        t_tensor = torch.full((bsz,), t, dtype=torch.long, device=k_c.device)
+        m_t = self.schedule.get_by_t(t_tensor, device=k_c.device, dtype=k_c.dtype)
 
-        k_rec, direct_k = run_reverse_loop(
+        # Eq.9 start from center-preserved k_T, no Gaussian noise.
+        k_t = m_t * k_c
+
+        k0_rec, direct_k = run_reverse_loop(
             model=self.denoise_fn,
             k_t=k_t,
             k_c=k_c,
-            acq_mask=mask,
             schedule=self.schedule,
             timesteps=t,
-            use_explicit_dc=self.use_explicit_dc,
         )
 
         xt = fastmri.ifft2c(k_t)
         direct_recons = fastmri.ifft2c(direct_k) if direct_k is not None else None
-        img = fastmri.ifft2c(k_rec)
+        img = fastmri.ifft2c(k0_rec)
 
         self.denoise_fn.train()
         return xt, direct_recons, img
@@ -159,11 +156,6 @@ class KspaceDiffusion(nn.Module):
             f'height and width of image must be {self.image_size}'
         )
 
-        # 随机选择时间步
+        # sample t in [1, T]
         t = torch.randint(1, self.num_timesteps + 1, (bsz,), device=kspace.device).long()
-
-        # 使用 apply_filter_degradation 来生成退化后的 k_c
-        k_c = apply_filter_degradation(kspace, t, schedule_type="dense")  # 或者根据需求选择 "linear" 或 "sparse"
-
-        # 调用 p_losses 来进行模型的损失计算
-        return self.p_losses(kspace, mask, t, k_c)
+        return self.p_losses(kspace, mask, t)

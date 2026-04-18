@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from functools import partial
 from pathlib import Path
-from torch.optim import Adam
+from torch.optim import AdamW
 from tqdm import tqdm
 import fastmri
 import os
@@ -139,7 +139,7 @@ class Trainer:
         self.dataloader_test = dataloader_test
         self.dl_test = cycle(dataloader_test) if dataloader_test is not None else None
 
-        self.opt = Adam(diffusion_model.parameters(), lr=train_lr)
+        self.opt = AdamW(diffusion_model.parameters(), lr=train_lr)
         self.step = 0
 
         self.results_folder = Path(results_folder)

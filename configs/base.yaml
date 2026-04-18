@@ -5,7 +5,7 @@ data:
   dataset_name: fastMRI_knee
   image_size: 320
   R: 4
-  mask_type: 'dense'  # 修改为 'dense' 或 'linear' 或 'sparse'
+  mask_type: equispace_diffusion  # 修改为 'dense' 或 'linear' 或 'sparse'
   center_fraction: 0.08
   patch_size: 4
   seed: 42
@@ -44,7 +44,7 @@ training:
   timesteps: 20
   loss_type: l1
   batch_size: 8
-  lambda_dc: 0.5
+  lambda_dc: 1
   lr: 1e-4
   train_num_steps: 10000
   gradient_accumulate_every: 1
@@ -52,8 +52,8 @@ training:
   ema_decay: 0.995
   step_start_ema: 1000
   update_ema_every: 10
-  save_and_sample_every: 1000
-  results_folder: './results_filterdiff_dc_1'
+  save_and_sample_every: 100
+  results_folder: './results_filterdiff_dense'
   filter_schedule_type: dense
-  center_core_size: 32
+  center_core_size: 26
   use_explicit_dc: True
