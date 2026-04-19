@@ -152,6 +152,7 @@ def main():
         loss_type=config.training.loss_type,
         schedule_type=getattr(config.training, 'filter_schedule_type', 'dense'),
         center_core_size=center_core_size,
+        lambda_img=float(getattr(config.training, 'lambda_img', 1.0)),
         center_fraction=getattr(config.data, 'center_fraction', None),
         use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
     ).to(device)
@@ -172,6 +173,7 @@ def main():
         load_path=args.ckpt if args.mode == 'test' else None,
         dataloader_train=train_loader,
         dataloader_test=val_loader,
+
         val_every=int(getattr(config.training, 'val_every', 500)),
         early_stop_patience=int(getattr(config.training, 'early_stop_patience', 10)),
         early_stop_min_delta=float(getattr(config.training, 'early_stop_min_delta', 1e-4)),

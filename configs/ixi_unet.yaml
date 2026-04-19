@@ -12,7 +12,7 @@ data:
   num_skip_slice: 10
   normalize_mode: percentile
 
-  mask_type: equispace_diffusion
+  mask_type: equispaced_cartesian
   R: 4
   center_fraction: 0.08
   patch_size: 1
@@ -35,13 +35,13 @@ training:
   step_start_ema: 1000
   update_ema_every: 10
   save_and_sample_every: 500
-  results_folder: ./results_ixi_swin
+  results_folder: ./results_ixi_unet
 
   filter_schedule_type: dense
-  center_core_size: 20
+  center_core_size: 13
   use_explicit_dc: True
 
-  val_every: 1000
+  val_every: 100
   max_val_batches: 100
   early_stop_patience: 12
   early_stop_min_delta: 0.002

@@ -18,14 +18,13 @@ data:
 
 model:
   backbone: swin_dits
-  residual: False
-
   patch_size: 4
   hidden_size: 384
   depth: 8
   num_heads: 8
   window_size: 8
   mlp_ratio: 4.0
+  residual: False
 
 training:
   timesteps: 19
@@ -35,11 +34,10 @@ training:
   train_num_steps: 10000
   gradient_accumulate_every: 1
   fp16: False
-
   ema_decay: 0.995
   step_start_ema: 1000
   update_ema_every: 10
-  save_and_sample_every: 100
+  save_and_sample_every: 1000
   results_folder: ./results_ixi_dense
 
   filter_schedule_type: dense

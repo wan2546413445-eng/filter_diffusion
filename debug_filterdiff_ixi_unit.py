@@ -54,6 +54,7 @@ def build_mask_func(config):
         )
     elif mask_type == "random_diffusion":
         return RandomMaskDiffusion(
+
             center_fraction=config.data.center_fraction,
             acceleration=config.data.R,
             size=size,

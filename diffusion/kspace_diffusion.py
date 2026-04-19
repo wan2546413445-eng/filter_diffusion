@@ -1,8 +1,7 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
-
 import fastmri
+from torch import nn
 
 from diffusion.filter_schedule import CenterRectangleSchedule
 from diffusion.delta_target import build_delta_target
@@ -12,13 +11,23 @@ from diffusion.reverse_loop import run_reverse_loop
 
 class KspaceDiffusion(nn.Module):
     """
-    FilterDiff-aligned implementation (except restoration network architecture):
-      Eq.6:  k_t = M_t ⊙ k_0
-      Eq.8:  L = ||Δk_pred - Δk_gt|| + λ ||x0_pred - x0||, λ=1
-             where Δk_pred = ΔM_{t-1} ⊙ FFT(x0_pred)
-      Eq.9:  k_{t-1} = k_t + Δk_t, deterministic reverse loop.
+    Strictly following Eq.(7)(8)(9) in FilterDiff:
 
-    Network input channels are [k_t(2), k_c(2), M_t(1)] = 5 channels per coil.
+      Eq.6:  k_t = M_t ⊙ k_0
+
+      Eq.7:  Δk̄_{t-1} = Rθ(Cond)
+                       = ΔM_{t-1} ⊙ FFT( φθ(Cond) )
+             where Cond = (M_t, k_t, k_c, t)
+
+      Eq.8:  L = || Rθ(M_t, k_t, k_c, t) - Δk_{t-1} ||
+                + λ || φθ(M_t, k_t, k_c, t) - x_0 ||
+
+      Eq.9:  k̄_{t-1} = k̄_t + Rθ(M_t, k̄_t, k_c, t)
+
+    Important:
+    - We keep image-domain supervision on φθ output (x0_pred vs x0)
+    - We do NOT ifft k_t / k_c before feeding the backbone, because
+      the formula defines Cond using (M_t, k_t, k_c, t)
     """
 
     def __init__(
@@ -53,63 +62,76 @@ class KspaceDiffusion(nn.Module):
             center_core_size=center_core_size,
             schedule_type=schedule_type,
         )
+
     def _build_conditional_kc(self, kspace: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         kspace: [B,Nc,H,W,2]
         mask:   [B,1,H,W] or [B,H,W]
+        return: k_c = mask ⊙ k_0
         """
         if mask.ndim == 3:
             mask = mask.unsqueeze(1)
-        # -> [B,1,H,W,1], broadcast on coil/channel dimensions
-        mask = mask.unsqueeze(-1)
+        mask = mask.unsqueeze(-1)  # [B,1,H,W,1]
         return kspace * mask
 
     def _run_backbone(self, k_t, k_c, m_t, t):
+        """
+        Strict formula version:
+        backbone input uses Cond = (M_t, k_t, k_c, t) directly.
+
+        Input channels:
+            k_t(2) + k_c(2) + M_t(1) = 5
+
+        Output:
+            φθ(Cond), interpreted as x0_pred in image domain
+            shape [B,Nc,H,W,2]
+        """
         bsz, ncoil, h, w, _ = k_t.shape
 
-        # 转为图像域复数
-        img_t = fastmri.ifft2c(k_t)  # (B,Nc,H,W,2)
-        img_c = fastmri.ifft2c(k_c)
+        # directly use k-space tensors as condition input
+        k_t_in = k_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)   # [B*Nc,2,H,W]
+        k_c_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)   # [B*Nc,2,H,W]
 
-        # 重塑并拼接
-        img_t_in = img_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)  # (B*Nc,2,H,W)
-        img_c_in = img_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
-        # 掩码处理
-        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)  # (B,Nc,H,W,1)
-        mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)  # (B*Nc,1,H,W)
+        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)                       # [B,Nc,H,W,1]
+        m_t_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
 
-        model_in = torch.cat([img_t_in, img_c_in, mt_in], dim=1)  # (B*Nc,5,H,W)
+        model_in = torch.cat([k_t_in, k_c_in, m_t_in], dim=1)            # [B*Nc,5,H,W]
         t_in = t.repeat_interleave(ncoil)
 
-        x0_pred = self.denoise_fn(model_in, t_in)  # (B*Nc,2,H,W)
+        x0_pred = self.denoise_fn(model_in, t_in)                         # [B*Nc,2,H,W]
         x0_pred = x0_pred.permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
         return x0_pred
 
     def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Training loss exactly following Eq.(8).
+        """
+        # x0 in image domain for supervision
         x0 = fastmri.ifft2c(kspace)
 
+        # masks
         m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
         t_minus_1 = torch.clamp(t - 1, min=0)
         m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
-
         delta_m = m_t_minus_1 - m_t
 
-        # Eq.6 forward degradation: k_t = M_t ⊙ k_0
+        # Eq.6: k_t = M_t ⊙ k_0
         k_t = apply_filter_degradation(kspace, m_t)
 
-        # Conditional input k_c (fixed under-sampled k-space)
+        # fixed conditional observation k_c
         k_c = self._build_conditional_kc(kspace, mask)
 
-        # Eq.8 Δk ground truth: ΔM_{t-1} ⊙ k_0
+        # ground-truth Δk_{t-1} = (M_{t-1} - M_t) ⊙ k_0
         delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
 
-        # φθ output: x0_pred (image domain)
+        # φθ(Cond)
         x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
 
-        # Eq.8 Rθ: Δk_pred = ΔM_{t-1} ⊙ FFT(x0_pred)
+        # Eq.7: Rθ = ΔM_{t-1} ⊙ FFT(φθ)
         k0_pred = fastmri.fft2c(x0_pred)
         delta_pred = delta_m * k0_pred
 
+        # Eq.8 losses
         if self.loss_type == 'l1':
             loss_delta = F.l1_loss(delta_pred, delta_gt)
             loss_img = F.l1_loss(x0_pred, x0)
@@ -124,9 +146,10 @@ class KspaceDiffusion(nn.Module):
     @torch.no_grad()
     def sample(self, k_c: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
         """
-        Input: conditional under-sampled k-space k_c and acquisition mask.
-        Eq.9 initialization: k_T = M_T ⊙ k_c.
-        Returns final reconstruction image from k_0.
+        Reverse process following Eq.(9).
+
+        Initialization keeps the original FilterDiff logic:
+            k_T = M_T ⊙ k_c
         """
         self.denoise_fn.eval()
 
@@ -137,7 +160,7 @@ class KspaceDiffusion(nn.Module):
         t_tensor = torch.full((bsz,), t, dtype=torch.long, device=k_c.device)
         m_t = self.schedule.get_by_t(t_tensor, device=k_c.device, dtype=k_c.dtype)
 
-        # Eq.9 start from center-preserved k_T, no Gaussian noise.
+        # reverse start from k_T
         k_t = m_t * k_c
 
         k0_rec, direct_k = run_reverse_loop(
@@ -149,6 +172,7 @@ class KspaceDiffusion(nn.Module):
             timesteps=t,
             use_explicit_dc=self.use_explicit_dc,
         )
+
         xt = fastmri.ifft2c(k_t)
         direct_recons = fastmri.ifft2c(direct_k) if direct_k is not None else None
         img = fastmri.ifft2c(k0_rec)
