@@ -173,6 +173,9 @@ def main():
         load_path=args.ckpt if args.mode == 'test' else None,
         dataloader_train=train_loader,
         dataloader_test=val_loader,
+        lr_scheduler_type=str(getattr(config.training, 'lr_scheduler_type', 'none')),
+        warmup_steps=int(getattr(config.training, 'warmup_steps', 0)),
+        min_lr=float(getattr(config.training, 'min_lr', 0.0)),
 
         val_every=int(getattr(config.training, 'val_every', 500)),
         early_stop_patience=int(getattr(config.training, 'early_stop_patience', 10)),

@@ -132,12 +132,20 @@ class KspaceDiffusion(nn.Module):
         delta_pred = delta_m * k0_pred
 
         # Eq.8 losses
+        # 只在 DeltaM support 上计算 delta loss，避免被整幅图均值稀释
+        delta_mask = delta_m.abs()  # [B,1,H,W,1]
+        delta_mask = delta_mask.expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])  # [B,Nc,H,W,2]
+
         if self.loss_type == 'l1':
-            loss_delta = F.l1_loss(delta_pred, delta_gt)
+            delta_abs = torch.abs(delta_pred - delta_gt)
+            loss_delta = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
             loss_img = F.l1_loss(x0_pred, x0)
+
         elif self.loss_type == 'l2':
-            loss_delta = F.mse_loss(delta_pred, delta_gt)
+            delta_sq = (delta_pred - delta_gt) ** 2
+            loss_delta = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
             loss_img = F.mse_loss(x0_pred, x0)
+
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
 
@@ -179,6 +187,138 @@ class KspaceDiffusion(nn.Module):
 
         self.denoise_fn.train()
         return xt, direct_recons, img
+
+    @torch.no_grad()
+    def debug_loss_terms(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor):
+        """
+        返回当前 t 下的各项 debug 信息：
+          - loss_delta
+          - loss_img
+          - total_loss
+          - 中间张量，便于外部可视化
+        """
+        x0 = fastmri.ifft2c(kspace)
+
+        m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
+        t_minus_1 = torch.clamp(t - 1, min=0)
+        m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
+        delta_m = m_t_minus_1 - m_t
+
+        # Eq.6
+        k_t = apply_filter_degradation(kspace, m_t)
+
+        # conditional observation
+        k_c = self._build_conditional_kc(kspace, mask)
+
+        # gt delta
+        delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
+
+        # network output
+        x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
+
+        # Eq.7
+        k0_pred = fastmri.fft2c(x0_pred)
+        delta_pred = delta_m * k0_pred
+
+        # losses
+        delta_mask = delta_m.abs()
+        delta_mask = delta_mask.expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
+
+        if self.loss_type == 'l1':
+            delta_abs = torch.abs(delta_pred - delta_gt)
+            loss_delta = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
+            loss_img = F.l1_loss(x0_pred, x0)
+
+        elif self.loss_type == 'l2':
+            delta_sq = (delta_pred - delta_gt) ** 2
+            loss_delta = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
+            loss_img = F.mse_loss(x0_pred, x0)
+
+        else:
+            raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
+
+        total_loss = loss_delta + self.lambda_img * loss_img
+
+        return {
+            "loss_delta": float(loss_delta.item()),
+            "loss_img": float(loss_img.item()),
+            "total_loss": float(total_loss.item()),
+            "x0": x0,
+            "x0_pred": x0_pred,
+            "k0": kspace,
+            "k_c": k_c,
+            "k_t": k_t,
+            "m_t": m_t,
+            "m_t_minus_1": m_t_minus_1,
+            "delta_m": delta_m,
+            "delta_gt": delta_gt,
+            "delta_pred": delta_pred,
+        }
+
+    @torch.no_grad()
+    def debug_terms(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor):
+        """
+        Debug helper:
+          - full-mean delta loss
+          - support-mean delta loss
+          - image loss
+          - all key tensors
+        """
+        x0 = fastmri.ifft2c(kspace)
+
+        m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
+        t_minus_1 = torch.clamp(t - 1, min=0)
+        m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
+        delta_m = m_t_minus_1 - m_t
+
+        k_t = apply_filter_degradation(kspace, m_t)
+        k_c = self._build_conditional_kc(kspace, mask)
+
+        delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
+
+        x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
+        k0_pred = fastmri.fft2c(x0_pred)
+        delta_pred = delta_m * k0_pred
+
+        # image loss
+        if self.loss_type == 'l1':
+            loss_img = F.l1_loss(x0_pred, x0)
+            loss_delta_full = F.l1_loss(delta_pred, delta_gt)
+
+            delta_abs = torch.abs(delta_pred - delta_gt)
+            delta_mask = delta_m.abs().expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
+            loss_delta_support = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
+
+        elif self.loss_type == 'l2':
+            loss_img = F.mse_loss(x0_pred, x0)
+            loss_delta_full = F.mse_loss(delta_pred, delta_gt)
+
+            delta_sq = (delta_pred - delta_gt) ** 2
+            delta_mask = delta_m.abs().expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
+            loss_delta_support = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
+
+        else:
+            raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
+
+        return {
+            "loss_img": float(loss_img.item()),
+            "loss_delta_full": float(loss_delta_full.item()),
+            "loss_delta_support": float(loss_delta_support.item()),
+
+            "x0": x0,
+            "x0_pred": x0_pred,
+            "k0": kspace,
+            "k_c": k_c,
+            "k_t": k_t,
+            "k0_pred": k0_pred,
+
+            "m_t": m_t,
+            "m_t_minus_1": m_t_minus_1,
+            "delta_m": delta_m,
+
+            "delta_gt": delta_gt,
+            "delta_pred": delta_pred,
+        }
 
     def forward(self, kspace, mask, mask_fold=None, *args, **kwargs):
         bsz, _, h, w, _ = kspace.shape

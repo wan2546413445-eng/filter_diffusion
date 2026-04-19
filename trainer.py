@@ -122,6 +122,9 @@ class Trainer:
             early_stop_min_delta=1e-4,
             monitor_metric='psnr',
             max_val_batches=None,
+            lr_scheduler_type='none',
+            warmup_steps=0,
+            min_lr=0.0,
     ):
         super().__init__()
         self.model = diffusion_model
@@ -142,6 +145,12 @@ class Trainer:
         self.dl_test = cycle(dataloader_test) if dataloader_test is not None else None
 
         self.opt = AdamW(diffusion_model.parameters(), lr=train_lr)
+
+
+        self.base_lr = float(train_lr)
+        self.lr_scheduler_type = str(lr_scheduler_type).lower()
+        self.warmup_steps = int(warmup_steps)
+        self.min_lr = float(min_lr)
         self.step = 0
 
         self.results_folder = Path(results_folder)
@@ -195,6 +204,28 @@ class Trainer:
         self.step = data['step']
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
+
+    def _compute_lr(self, step: int) -> float:
+        if self.lr_scheduler_type in ['none', 'constant', 'off', 'false']:
+            return self.base_lr
+
+        if self.lr_scheduler_type != 'cosine':
+            raise ValueError(f"Unsupported lr_scheduler_type: {self.lr_scheduler_type}")
+
+        warmup_steps = max(0, self.warmup_steps)
+        min_lr = max(0.0, self.min_lr)
+
+        if warmup_steps > 0 and step < warmup_steps:
+            return self.base_lr * float(step + 1) / float(max(1, warmup_steps))
+
+        progress = float(step - warmup_steps) / float(max(1, self.train_num_steps - warmup_steps))
+        progress = min(max(progress, 0.0), 1.0)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr + (self.base_lr - min_lr) * cosine
+
+    def _set_lr(self, lr: float):
+        for param_group in self.opt.param_groups:
+            param_group['lr'] = float(lr)
 
     def _log(self, msg: str):
         tqdm.write(msg, file=sys.stdout)
@@ -283,6 +314,7 @@ class Trainer:
 
         for step in pbar:
             self.step = step
+            self._set_lr(self._compute_lr(step))
             u_loss = 0.0
 
             for _ in range(self.gradient_accumulate_every):
@@ -310,7 +342,8 @@ class Trainer:
                 self.step_ema()
 
             # 保留你原来喜欢的显示风格：左边直接显示 Loss=...
-            pbar.set_description(f"Loss={train_loss:.6f}")
+            current_lr = self.opt.param_groups[0]['lr']
+            pbar.set_description(f"Loss={train_loss:.6f} | LR={current_lr:.6e}")
 
             if self.step != 0 and self.step % self.save_and_sample_every == 0:
                 mean_loss = acc_loss / (self.save_and_sample_every + 1)
