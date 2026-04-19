@@ -557,3 +557,45 @@ class RandomMaskGaussianDiffusion1D:
             concentration=self.concentration,
             patch_size=self.patch_size,
         )
+
+
+class EquispacedCartesianMask:
+    def __init__(self, acceleration=4, center_fraction=0.08, size=(1,256,256), seed=42):
+        self.acceleration = acceleration
+        self.center_fraction = center_fraction
+        self.size = size
+        self.seed = seed
+
+    def __call__(self):
+        with temp_seed(np.random, self.seed):
+            _, H, W = self.size
+            mask = np.ones(self.size, dtype=np.float32)
+
+            # 中心低频区域宽度
+            num_low_freqs = int(round(W * self.center_fraction))
+            pad = (W - num_low_freqs) // 2
+            # 中心区域保持全1（已为1，无需操作）
+
+            # 外周等间隔采样：每隔 acceleration 列保留一列，其余置0
+            for col in range(0, W, self.acceleration):
+                # 如果该列不在中心区域内，则置0（中心区域内已为1，跳过）
+                if col < pad or col >= pad + num_low_freqs:
+                    mask[:, :, col] = 0.0
+                else:
+                    # 中心区域内的列全部保留，但按等间隔规则，它们本来就在采样线上
+                    pass
+
+            # 修正：将外周不在采样线上的列置0
+            # 更简洁的实现：先生成全0，再设置中心区域和采样线
+            mask = np.zeros(self.size, dtype=np.float32)
+            # 中心矩形全采样
+            mask[:, :, pad:pad + num_low_freqs] = 1.0
+            # 外周等间隔采样线
+            for col in range(0, W, self.acceleration):
+                if col < pad or col >= pad + num_low_freqs:
+                    mask[:, :, col] = 1.0
+
+            # mask_fold 在 FilterDiff 中未使用，返回 dummy
+            mask_fold = np.ones((self.size[0], 1, 1), dtype=np.float32)
+
+        return mask, mask_fold

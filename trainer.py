@@ -11,7 +11,7 @@ import fastmri
 import os
 import errno
 from collections import OrderedDict
-
+import sys
 from utils.diffusion_utils import cycle, EMA, loss_backwards
 from utils.evaluation import calc_nmse_tensor, calc_psnr_tensor, calc_ssim_tensor
 
@@ -196,6 +196,9 @@ class Trainer:
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
 
+    def _log(self, msg: str):
+        tqdm.write(msg, file=sys.stdout)
+
     @torch.no_grad()
     def validate(self, t):
         if self.dataloader_test is None:
@@ -213,8 +216,7 @@ class Trainer:
         if self.max_val_batches is not None:
             total_eval = min(total_eval, self.max_val_batches)
 
-        pbar = tqdm(total=total_eval, desc='VAL', leave=False)
-
+        # 不再给 validate 单独开 tqdm，避免和训练条抢输出
         for batch_idx, batch in enumerate(self.dataloader_test):
             if self.max_val_batches is not None and batch_idx >= self.max_val_batches:
                 break
@@ -248,9 +250,6 @@ class Trainer:
             psnr += psnrb / B
             ssim += ssimb / B
             num_eval_batches += 1
-            pbar.update(1)
-
-        pbar.close()
 
         if num_eval_batches == 0:
             self.ema_model.train()
@@ -271,7 +270,16 @@ class Trainer:
         backwards = partial(loss_backwards, self.fp16)
 
         acc_loss = 0.0
-        pbar = tqdm(range(self.train_num_steps), desc='LOSS')
+        pbar = tqdm(
+            range(self.train_num_steps),
+            desc='Loss=0.000000',
+            ascii=True,
+            dynamic_ncols=False,
+            ncols=100,
+            mininterval=0.5,
+            leave=True,
+            file=sys.stdout
+        )
 
         for step in pbar:
             self.step = step
@@ -293,7 +301,6 @@ class Trainer:
                 backwards(loss / self.gradient_accumulate_every, self.opt)
 
             train_loss = u_loss / self.gradient_accumulate_every
-            pbar.set_description(f"Loss={train_loss:.6f}")
             acc_loss += train_loss
 
             self.opt.step()
@@ -302,28 +309,30 @@ class Trainer:
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
+            # 保留你原来喜欢的显示风格：左边直接显示 Loss=...
+            pbar.set_description(f"Loss={train_loss:.6f}")
+
             if self.step != 0 and self.step % self.save_and_sample_every == 0:
                 mean_loss = acc_loss / (self.save_and_sample_every + 1)
-                print(f"Mean LOSS of last {self.step}: {mean_loss:.6f}")
+                self._log(f"Mean LOSS of last {self.step}: {mean_loss:.6f}")
                 acc_loss = 0.0
                 self.save(self.step)
 
             if self.dataloader_test is not None and self.step != 0 and self.step % self.val_every == 0:
                 metrics = self.validate(t=self.model.num_timesteps)
                 if metrics is None:
-                    print(f"[VAL @ step {self.step}] skipped (no validation batches)")
+                    self._log(f"[VAL @ step {self.step}] skipped (no validation batches)")
                     continue
 
                 cur_metric = metrics[self.monitor_metric]
 
-                print(
+                self._log(
                     f"[VAL @ step {self.step}] "
                     f"PSNR={metrics['psnr']:.6f} | "
                     f"SSIM={metrics['ssim']:.6f} | "
                     f"NMSE={metrics['nmse']:.6f}"
                 )
 
-                improved = False
                 if self.monitor_metric in ['psnr', 'ssim']:
                     improved = cur_metric > (self.best_metric + self.early_stop_min_delta)
                 else:
@@ -342,16 +351,16 @@ class Trainer:
                         'val_metrics': metrics,
                     }
                     torch.save(data, str(self.results_folder / 'best.pt'))
-                    print(f"[BEST] step={self.step} | {self.monitor_metric}={self.best_metric:.6f}")
+                    self._log(f"[BEST] step={self.step} | {self.monitor_metric}={self.best_metric:.6f}")
                 else:
                     self.no_improve_count += 1
-                    print(
+                    self._log(
                         f"[NO IMPROVEMENT] count={self.no_improve_count}/"
                         f"{self.early_stop_patience}"
                     )
 
                     if self.no_improve_count >= self.early_stop_patience:
-                        print(
+                        self._log(
                             f"[EARLY STOP] step={self.step} | "
                             f"best {self.monitor_metric}={self.best_metric:.6f}"
                         )
@@ -359,11 +368,11 @@ class Trainer:
                         return
 
         self.save(self.step + 1)
-        print('training completed')
+        self._log('training completed')
 
     def test(self, t, num_samples=1):
         if self.dataloader_test is None:
-            print("No test dataloader provided.")
+            self._log("No test dataloader provided.")
             return None, None, None, None
 
         torch.set_grad_enabled(False)
@@ -372,16 +381,26 @@ class Trainer:
         xt_list = []
         direct_recons_list = []
 
-        nmse = 0
-        psnr = 0
-        ssim = 0
+        nmse = 0.0
+        psnr = 0.0
+        ssim = 0.0
 
-        print('\nEvaluation:')
+        self._log('\nEvaluation:')
         self.ema_model.eval()
         self.ema_model.training = False
 
         with torch.no_grad():
-            pbar = tqdm(range(len(self.dataloader_test)), desc='TEST')
+            pbar = tqdm(
+                range(len(self.dataloader_test)),
+                desc='TEST',
+                ascii=True,
+                dynamic_ncols=False,
+                ncols=100,
+                mininterval=0.5,
+                leave=True,
+                file=sys.stdout
+            )
+
             for idx in pbar:
                 batch = next(self.dl_test)
                 kspace, mask, mask_fold, maps = unpack_batch(batch)
@@ -413,9 +432,9 @@ class Trainer:
                 gt_imgs_abs = eval_image_from_multicoil(gt_imgs, maps)
                 sample_imgs_abs = eval_image_from_multicoil(sample_imgs, maps)
 
-                nmseb = 0
-                psnrb = 0
-                ssimb = 0
+                nmseb = 0.0
+                psnrb = 0.0
+                ssimb = 0.0
                 for i in range(B):
                     nmseb += calc_nmse_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
                     psnrb += calc_psnr_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
@@ -430,7 +449,7 @@ class Trainer:
                 ssim += ssimb
 
                 if idx == 0:
-                    print(f'Batch PSNR: {psnrb:.5f} || SSIM: {ssimb:.5f}')
+                    self._log(f'Batch PSNR: {psnrb:.5f} || SSIM: {ssimb:.5f}')
 
                 sample_imgs_list.append(sample_imgs)
                 gt_imgs_list.append(gt_imgs)
@@ -441,8 +460,8 @@ class Trainer:
             psnr = psnr / len(self.dataloader_test)
             ssim = ssim / len(self.dataloader_test)
 
-            print(f'### NMSE: {nmse:.6f} || PSNR: {psnr:.6f} || SSIM: {ssim:.6f}')
-            print('----------------------------------------------------------------------')
+            self._log(f'### NMSE: {nmse:.6f} || PSNR: {psnr:.6f} || SSIM: {ssim:.6f}')
+            self._log('----------------------------------------------------------------------')
             torch.set_grad_enabled(True)
 
         return sample_imgs_list, gt_imgs_list, xt_list, direct_recons_list
@@ -450,9 +469,14 @@ class Trainer:
     def recon_slice(self, t, idx_case, num_samples=1):
         torch.set_grad_enabled(False)
 
-        print('\nEvaluation:')
+        self._log('\nEvaluation:')
         self.ema_model.eval()
         self.ema_model.training = False
+
+        sample_imgs = None
+        gt_imgs = None
+        xt = None
+        direct_recons = None
 
         for idx, batch in enumerate(self.dataloader_test):
             if idx != idx_case:
@@ -487,9 +511,9 @@ class Trainer:
             gt_imgs_abs = eval_image_from_multicoil(gt_imgs, maps)
             sample_imgs_abs = eval_image_from_multicoil(sample_imgs, maps)
 
-            nmseb = 0
-            psnrb = 0
-            ssimb = 0
+            nmseb = 0.0
+            psnrb = 0.0
+            ssimb = 0.0
             for i in range(B):
                 nmseb += calc_nmse_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
                 psnrb += calc_psnr_tensor(gt_imgs_abs[i], sample_imgs_abs[i])
@@ -499,9 +523,14 @@ class Trainer:
             psnrb /= B
             ssimb /= B
 
-            print(f'### NMSE: {nmseb:.6f} || PSNR: {psnrb:.6f} || SSIM: {ssimb:.6f}')
-            print('----------------------------------------------------------------------')
+            self._log(f'### NMSE: {nmseb:.6f} || PSNR: {psnrb:.6f} || SSIM: {ssimb:.6f}')
+            self._log('----------------------------------------------------------------------')
             torch.set_grad_enabled(True)
             break
+
+        if sample_imgs is None:
+            torch.set_grad_enabled(True)
+            raise IndexError(
+                f'idx_case={idx_case} is out of range for dataloader_test with len={len(self.dataloader_test)}')
 
         return sample_imgs, gt_imgs, xt, direct_recons

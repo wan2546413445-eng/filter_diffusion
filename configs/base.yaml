@@ -41,7 +41,7 @@ model:
 
 
 training:
-  timesteps: 20
+  timesteps: 19
   loss_type: l1
   batch_size: 8
   lambda_dc: 1

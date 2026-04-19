@@ -23,7 +23,7 @@ model:
   dim_mults: [1, 2, 4, 8]
   residual: False
 training:
-  timesteps: 20
+  timesteps: 19
   loss_type: l1
   batch_size: 8
   lr: 1e-4

@@ -112,6 +112,12 @@ class IXISinglecoilSliceDataset(Dataset):
         elif self.normalize_mode == "max":
             x = x / (x.abs().max() + 1e-8)
 
+        elif self.normalize_mode == "img_std":
+            # 新增：图像域 L2 归一化（保持零均值？MRI 图像非负，不强制减均值）
+            # 计算幅值的均方根，并将图像缩放到 RMS=1
+            rms = torch.sqrt(torch.mean(x ** 2) + 1e-8)
+            x = x / rms
+
         else:
             raise ValueError(f"Unsupported normalize_mode: {self.normalize_mode}")
 

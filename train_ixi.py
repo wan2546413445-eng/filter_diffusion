@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from utils.utils import dict2namespace, setup_seed
-from utils.sample_mask import RandomMaskGaussianDiffusion, RandomMaskDiffusion, EquiSpaceMaskDiffusion
+from utils.sample_mask import EquispacedCartesianMask, RandomMaskDiffusion, EquiSpaceMaskDiffusion
 from utils.diffusion_utils import cycle
 
 from data.ixi_singlecoil_dataset import IXISinglecoilSliceDataset
@@ -19,13 +19,12 @@ def build_mask_func(config):
     mask_type = config.data.mask_type
     seed = getattr(config.data, "seed", getattr(config, "seed", 42))
 
-    if mask_type == 'gaussian_diffusion':
-        return RandomMaskGaussianDiffusion(
+    if mask_type == 'equispaced_cartesian':  # 新增
+        return EquispacedCartesianMask(
             acceleration=config.data.R,
             center_fraction=config.data.center_fraction,
             size=size,
-            seed=seed,
-            patch_size=config.data.patch_size
+            seed=seed
         )
     elif mask_type == 'random_diffusion':
         return RandomMaskDiffusion(

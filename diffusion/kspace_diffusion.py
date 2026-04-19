@@ -31,7 +31,7 @@ class KspaceDiffusion(nn.Module):
             timesteps=20,
             loss_type='l1',
             schedule_type='dense',
-            center_core_size=32,
+            center_core_size=64,
             use_explicit_dc=False,
             **kwargs,
     ):
@@ -64,20 +64,24 @@ class KspaceDiffusion(nn.Module):
         mask = mask.unsqueeze(-1)
         return kspace * mask
 
-    def _run_backbone(self, k_t: torch.Tensor, k_c: torch.Tensor, m_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """Return x0_pred in image domain, shape [B,Nc,H,W,2]."""
+    def _run_backbone(self, k_t, k_c, m_t, t):
         bsz, ncoil, h, w, _ = k_t.shape
 
-        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)
+        # 转为图像域复数
+        img_t = fastmri.ifft2c(k_t)  # (B,Nc,H,W,2)
+        img_c = fastmri.ifft2c(k_c)
 
-        kt_in = k_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
-        kc_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
-        mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
+        # 重塑并拼接
+        img_t_in = img_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)  # (B*Nc,2,H,W)
+        img_c_in = img_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
+        # 掩码处理
+        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)  # (B,Nc,H,W,1)
+        mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)  # (B*Nc,1,H,W)
 
-        model_in = torch.cat([kt_in, kc_in, mt_in], dim=1)  # [B*Nc,5,H,W]
+        model_in = torch.cat([img_t_in, img_c_in, mt_in], dim=1)  # (B*Nc,5,H,W)
         t_in = t.repeat_interleave(ncoil)
 
-        x0_pred = self.denoise_fn(model_in, t_in)
+        x0_pred = self.denoise_fn(model_in, t_in)  # (B*Nc,2,H,W)
         x0_pred = x0_pred.permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
         return x0_pred
 
