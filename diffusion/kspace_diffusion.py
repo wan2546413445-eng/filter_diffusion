@@ -11,7 +11,7 @@ from diffusion.reverse_loop import run_reverse_loop
 
 class KspaceDiffusion(nn.Module):
     """
-    Strictly following Eq.(7)(8)(9) in FilterDiff:
+    FilterDiff training with Eq.(7)(8)(9) supervision preserved.
 
       Eq.6:  k_t = M_t ⊙ k_0
 
@@ -24,10 +24,13 @@ class KspaceDiffusion(nn.Module):
 
       Eq.9:  k̄_{t-1} = k̄_t + Rθ(M_t, k̄_t, k_c, t)
 
-    Important:
-    - We keep image-domain supervision on φθ output (x0_pred vs x0)
-    - We do NOT ifft k_t / k_c before feeding the backbone, because
-      the formula defines Cond using (M_t, k_t, k_c, t)
+    Engineering choice:
+    - Supervision stays exactly in the original two domains:
+        * image-domain supervision on x0_pred
+        * k-space supervision on delta_pred
+    - Only the backbone INPUT representation is changed:
+        * use image-domain realizations of k_t and k_c as inputs
+        * still keep M_t as an explicit condition
     """
 
     def __init__(
@@ -80,11 +83,11 @@ class KspaceDiffusion(nn.Module):
 
     def _run_backbone(self, k_t, k_c, m_t, t):
         """
-        Strict formula version:
-        backbone input uses Cond = (M_t, k_t, k_c, t) directly.
+        Backbone condition still comes from (M_t, k_t, k_c, t), but
+        k_t / k_c are represented in image domain before concatenation.
 
         Input channels:
-            k_t(2) + k_c(2) + M_t(1) = 5
+            ifft(k_t)(2) + ifft(k_c)(2) + M_t(1) = 5
 
         Output:
             φθ(Cond), interpreted as x0_pred in image domain
@@ -92,76 +95,59 @@ class KspaceDiffusion(nn.Module):
         """
         bsz, ncoil, h, w, _ = k_t.shape
 
-        # directly use k-space tensors as condition input
-        k_t_in = k_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)   # [B*Nc,2,H,W]
-        k_c_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)   # [B*Nc,2,H,W]
+        # represent k-space conditions in image domain for the backbone
+        x_t = fastmri.ifft2c(k_t)                                              # [B,Nc,H,W,2]
+        x_c = fastmri.ifft2c(k_c)                                              # [B,Nc,H,W,2]
 
-        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)                       # [B,Nc,H,W,1]
-        m_t_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
+        x_t_in = x_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)        # [B*Nc,2,H,W]
+        x_c_in = x_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)        # [B*Nc,2,H,W]
 
-        model_in = torch.cat([k_t_in, k_c_in, m_t_in], dim=1)            # [B*Nc,5,H,W]
+        m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)                            # [B,Nc,H,W,1]
+        m_t_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)     # [B*Nc,1,H,W]
+
+        model_in = torch.cat([x_t_in, x_c_in, m_t_in], dim=1)                 # [B*Nc,5,H,W]
         t_in = t.repeat_interleave(ncoil)
 
-        x0_pred = self.denoise_fn(model_in, t_in)                         # [B*Nc,2,H,W]
+        x0_pred = self.denoise_fn(model_in, t_in)                              # [B*Nc,2,H,W]
         x0_pred = x0_pred.permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
         return x0_pred
 
     def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Training loss exactly following Eq.(8).
+        Training loss keeps the original Eq.(8) form.
         """
-        # x0 in image domain for supervision
         x0 = fastmri.ifft2c(kspace)
 
-        # masks
         m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
         t_minus_1 = torch.clamp(t - 1, min=0)
         m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
         delta_m = m_t_minus_1 - m_t
 
-        # Eq.6: k_t = M_t ⊙ k_0
         k_t = apply_filter_degradation(kspace, m_t)
-
-        # fixed conditional observation k_c
         k_c = self._build_conditional_kc(kspace, mask)
-
-        # ground-truth Δk_{t-1} = (M_{t-1} - M_t) ⊙ k_0
         delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
 
-        # φθ(Cond)
         x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
 
-        # Eq.7: Rθ = ΔM_{t-1} ⊙ FFT(φθ)
         k0_pred = fastmri.fft2c(x0_pred)
         delta_pred = delta_m * k0_pred
 
-        # Eq.8 losses
-        # 只在 DeltaM support 上计算 delta loss，避免被整幅图均值稀释
-        delta_mask = delta_m.abs()  # [B,1,H,W,1]
-        delta_mask = delta_mask.expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])  # [B,Nc,H,W,2]
+        delta_mask = delta_m.abs()
+        delta_mask = delta_mask.expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
 
         if self.loss_type == 'l1':
             delta_abs = torch.abs(delta_pred - delta_gt)
             loss_delta = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-
-
         elif self.loss_type == 'l2':
             delta_sq = (delta_pred - delta_gt) ** 2
             loss_delta = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
-        loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
 
+        loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
         return loss_delta + self.lambda_img * loss_img
 
     def _compute_image_losses(self, x0_pred: torch.Tensor, x0: torch.Tensor):
-        """
-        返回：
-          loss_img      : 当前训练真正使用的图像域 loss
-          loss_img_real : 仅 real 部分的 loss（debug 用）
-          loss_img_imag : 仅 imag 部分的 loss（debug 用）
-          loss_img_mag  : magnitude loss（debug 用）
-        """
         if self.loss_type == 'l1':
             loss_img_real = F.l1_loss(x0_pred[..., 0], x0[..., 0])
             loss_img_imag = F.l1_loss(x0_pred[..., 1], x0[..., 1])
@@ -178,25 +164,17 @@ class KspaceDiffusion(nn.Module):
                 loss_img = F.l1_loss(x0_pred, x0)
             else:
                 loss_img = F.mse_loss(x0_pred, x0)
-
         elif self.image_loss_mode == "real":
             loss_img = loss_img_real
-
         elif self.image_loss_mode == "magnitude":
             loss_img = loss_img_mag
-
         else:
             raise NotImplementedError(f"Unsupported image_loss_mode: {self.image_loss_mode}")
 
         return loss_img, loss_img_real, loss_img_imag, loss_img_mag
+
     @torch.no_grad()
     def sample(self, k_c: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
-        """
-        Reverse process following Eq.(9).
-
-        Initialization keeps the original FilterDiff logic:
-            k_T = M_T ⊙ k_c
-        """
         self.denoise_fn.eval()
 
         if t is None:
@@ -206,7 +184,6 @@ class KspaceDiffusion(nn.Module):
         t_tensor = torch.full((bsz,), t, dtype=torch.long, device=k_c.device)
         m_t = self.schedule.get_by_t(t_tensor, device=k_c.device, dtype=k_c.dtype)
 
-        # reverse start from k_T
         k_t = m_t * k_c
 
         k0_rec, direct_k = run_reverse_loop(
@@ -228,13 +205,6 @@ class KspaceDiffusion(nn.Module):
 
     @torch.no_grad()
     def debug_loss_terms(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor):
-        """
-        返回当前 t 下的各项 debug 信息：
-          - loss_delta
-          - loss_img
-          - total_loss
-          - 中间张量，便于外部可视化
-        """
         x0 = fastmri.ifft2c(kspace)
 
         m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
@@ -242,23 +212,14 @@ class KspaceDiffusion(nn.Module):
         m_t_minus_1 = self.schedule.get_by_t(t_minus_1, device=kspace.device, dtype=kspace.dtype)
         delta_m = m_t_minus_1 - m_t
 
-        # Eq.6
         k_t = apply_filter_degradation(kspace, m_t)
-
-        # conditional observation
         k_c = self._build_conditional_kc(kspace, mask)
-
-        # gt delta
         delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
 
-        # network output
         x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
-
-        # Eq.7
         k0_pred = fastmri.fft2c(x0_pred)
         delta_pred = delta_m * k0_pred
 
-        # losses
         delta_mask = delta_m.abs()
         delta_mask = delta_mask.expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
 
@@ -266,12 +227,10 @@ class KspaceDiffusion(nn.Module):
             delta_abs = torch.abs(delta_pred - delta_gt)
             loss_delta = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
             loss_img = F.l1_loss(x0_pred, x0)
-
         elif self.loss_type == 'l2':
             delta_sq = (delta_pred - delta_gt) ** 2
             loss_delta = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
             loss_img = F.mse_loss(x0_pred, x0)
-
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
 
@@ -295,13 +254,6 @@ class KspaceDiffusion(nn.Module):
 
     @torch.no_grad()
     def debug_terms(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor):
-        """
-        Debug helper:
-          - full-mean delta loss
-          - support-mean delta loss
-          - image loss
-          - all key tensors
-        """
         x0 = fastmri.ifft2c(kspace)
 
         m_t = self.schedule.get_by_t(t, device=kspace.device, dtype=kspace.dtype)
@@ -311,55 +263,40 @@ class KspaceDiffusion(nn.Module):
 
         k_t = apply_filter_degradation(kspace, m_t)
         k_c = self._build_conditional_kc(kspace, mask)
-
         delta_gt = build_delta_target(kspace, m_t, m_t_minus_1)
 
         x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
         k0_pred = fastmri.fft2c(x0_pred)
         delta_pred = delta_m * k0_pred
-        # image loss
-        loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
 
-        # image loss
         if self.loss_type == 'l1':
-
+            loss_img = F.l1_loss(x0_pred, x0)
             loss_delta_full = F.l1_loss(delta_pred, delta_gt)
-
             delta_abs = torch.abs(delta_pred - delta_gt)
             delta_mask = delta_m.abs().expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
             loss_delta_support = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-
         elif self.loss_type == 'l2':
-
+            loss_img = F.mse_loss(x0_pred, x0)
             loss_delta_full = F.mse_loss(delta_pred, delta_gt)
-
             delta_sq = (delta_pred - delta_gt) ** 2
             delta_mask = delta_m.abs().expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])
             loss_delta_support = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
 
         return {
             "loss_img": float(loss_img.item()),
-            "loss_img_real": float(loss_img_real.item()),
-            "loss_img_imag": float(loss_img_imag.item()),
-            "loss_img_mag": float(loss_img_mag.item()),
-
             "loss_delta_full": float(loss_delta_full.item()),
             "loss_delta_support": float(loss_delta_support.item()),
-
             "x0": x0,
             "x0_pred": x0_pred,
             "k0": kspace,
             "k_c": k_c,
             "k_t": k_t,
             "k0_pred": k0_pred,
-
             "m_t": m_t,
             "m_t_minus_1": m_t_minus_1,
             "delta_m": delta_m,
-
             "delta_gt": delta_gt,
             "delta_pred": delta_pred,
         }
@@ -370,6 +307,5 @@ class KspaceDiffusion(nn.Module):
             f'height and width of image must be {self.image_size}'
         )
 
-        # sample t in [1, T]
         t = torch.randint(1, self.num_timesteps + 1, (bsz,), device=kspace.device).long()
         return self.p_losses(kspace, mask, t)
