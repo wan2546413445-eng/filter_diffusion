@@ -14,12 +14,16 @@ def run_reverse_loop(
     use_explicit_dc: bool = False,
 ):
     """
-    Strict Eq.(9) reverse loop:
+    Reverse loop with image-domain conditioning:
 
     for t = T ... 1:
         x0_pred = φθ(M_t, k_t, k_c, t)
         delta_k = (M_{t-1} - M_t) ⊙ FFT(x0_pred)
         k_{t-1} = k_t + delta_k
+
+    Note:
+    - supervision target is unchanged
+    - only the model INPUT representation is changed to image domain
     """
     cur_k = k_t
     direct_recons = None
@@ -30,27 +34,26 @@ def run_reverse_loop(
         t = torch.full((bsz,), t_scalar, dtype=torch.long, device=cur_k.device)
         t_prev = torch.clamp(t - 1, min=0)
 
-        m_t = schedule.get_by_t(t, device=cur_k.device, dtype=cur_k.dtype)            # [B,1,H,W,1]
+        m_t = schedule.get_by_t(t, device=cur_k.device, dtype=cur_k.dtype)
         m_t_minus_1 = schedule.get_by_t(t_prev, device=cur_k.device, dtype=cur_k.dtype)
-        delta_mask = m_t_minus_1 - m_t                                                 # [B,1,H,W,1]
+        delta_mask = m_t_minus_1 - m_t
 
-        # Cond = (M_t, k_t, k_c, t)
         m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)
 
-        cur_in = cur_k.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)              # [B*Nc,2,H,W]
-        kc_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)                 # [B*Nc,2,H,W]
-        mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)              # [B*Nc,1,H,W]
+        # keep inference input representation consistent with training
+        x_t = fastmri.ifft2c(cur_k)
+        x_c = fastmri.ifft2c(k_c)
 
-        model_in = torch.cat([cur_in, kc_in, mt_in], dim=1)                           # [B*Nc,5,H,W]
+        cur_in = x_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
+        kc_in = x_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
+        mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
+
+        model_in = torch.cat([cur_in, kc_in, mt_in], dim=1)
         t_in = t.repeat_interleave(ncoil)
 
-        # φθ(Cond)
         x0_pred = model(model_in, t_in).permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
 
-        # Rθ(Cond) = ΔM_{t-1} ⊙ FFT(φθ(Cond))
         delta_k = delta_mask * fastmri.fft2c(x0_pred)
-
-        # Eq.(9)
         k_pred = cur_k + delta_k
 
         if direct_recons is None:
