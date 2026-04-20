@@ -231,6 +231,9 @@ def debug_forward(model, kspace, mask, outdir: Path, t_list):
             f"[forward t={int(t_scalar):02d}] "
             f"x0_pred_psnr_sharedGT={x0_psnr:.4f} | "
             f"loss_img={dbg['loss_img']:.6f} | "
+            f"loss_img_real={dbg['loss_img_real']:.6f} | "
+            f"loss_img_imag={dbg['loss_img_imag']:.6f} | "
+            f"loss_img_mag={dbg['loss_img_mag']:.6f} | "
             f"loss_delta_full={dbg['loss_delta_full']:.6f} | "
             f"loss_delta_support={dbg['loss_delta_support']:.6f}"
         )

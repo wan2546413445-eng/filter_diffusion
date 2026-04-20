@@ -38,16 +38,17 @@ training:
   step_start_ema: 2000
   update_ema_every: 10
   save_and_sample_every: 2000
-  results_folder: ./results_ixi_dense
+  results_folder: ./results_ixi_dense_real
   lr_scheduler_type: cosine
   warmup_steps: 2000
   min_lr: 1e-6
   filter_schedule_type: dense
   center_core_size: 13
   use_explicit_dc: True
-
+  image_loss_mode: real
   val_every: 2000
   max_val_batches: 50
   early_stop_patience: 10000
   early_stop_min_delta: 0.0000001
   monitor_metric: psnr
+  lambda_img: 1.0

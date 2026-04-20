@@ -11,8 +11,8 @@ from tqdm import tqdm
 import fastmri
 
 from utils.utils import dict2namespace
-from utils.mri_data import SliceDataset
-from utils.data_transform import DataTransform_Diffusion
+from data.mri_data import SliceDataset
+from data.data_transform import DataTransform_Diffusion
 from utils.sample_mask import (
     RandomMaskGaussianDiffusion,
     RandomMaskDiffusion,

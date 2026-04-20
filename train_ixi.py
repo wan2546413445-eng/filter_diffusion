@@ -154,6 +154,7 @@ def main():
         center_core_size=center_core_size,
         lambda_img=float(getattr(config.training, 'lambda_img', 1.0)),
         center_fraction=getattr(config.data, 'center_fraction', None),
+        image_loss_mode=str(getattr(config.training, 'image_loss_mode', 'complex')),
         use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
     ).to(device)
 

@@ -5,9 +5,9 @@ import torch
 from torch.utils.data import DataLoader
 import pathlib
 from utils.utils import dict2namespace, setup_seed
-from utils.mri_data import SliceDataset
-from utils.data_transform import DataTransform_Diffusion
-from utils.sample_mask import RandomMaskGaussianDiffusion, RandomMaskDiffusion, EquiSpaceMaskDiffusion
+from data.mri_data import SliceDataset
+from data.data_transform import DataTransform_Diffusion
+from utils.sample_mask import EquispacedCartesianMask, RandomMaskDiffusion, EquiSpaceMaskDiffusion
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from trainer import Trainer
@@ -34,13 +34,12 @@ def main():
     # ====== 初始化掩码生成器 ======
     size = (1, config.data.image_size, config.data.image_size)
     mask_type = config.data.mask_type
-    if mask_type == 'gaussian_diffusion':
-        mask_func = RandomMaskGaussianDiffusion(
+    if mask_type == 'equispaced_cartesian':  # 新增
+        mask_func = EquispacedCartesianMask(
             acceleration=config.data.R,
             center_fraction=config.data.center_fraction,
             size=size,
-            seed=config.data.seed,
-            patch_size=config.data.patch_size
+            seed=config.data.seed
         )
     elif mask_type == 'random_diffusion':
         mask_func = RandomMaskDiffusion(
@@ -167,6 +166,7 @@ def main():
         center_core_size=center_core_size,
         lambda_img=getattr(config.training, 'lambda_img', 1.0),
         use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
+        image_loss_mode=str(getattr(config.training, 'image_loss_mode', 'complex')),
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架
     # 创建 Trainer
@@ -190,6 +190,10 @@ def main():
         early_stop_patience=int(getattr(config.training, 'early_stop_patience', 10)),
         early_stop_min_delta=float(getattr(config.training, 'early_stop_min_delta', 1e-4)),
         monitor_metric=str(getattr(config.training, 'monitor_metric', 'psnr')),
+        max_val_batches=int(getattr(config.training, 'max_val_batches', 20)),
+        lr_scheduler_type=str(getattr(config.training, 'lr_scheduler_type', 'none')),
+        warmup_steps=int(getattr(config.training, 'warmup_steps', 0)),
+        min_lr=float(getattr(config.training, 'min_lr', 0.0)),
     )
     if args.mode == 'train':
         trainer.train()

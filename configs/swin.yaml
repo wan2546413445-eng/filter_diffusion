@@ -5,10 +5,11 @@ data:
   dataset_name: fastMRI_knee
   image_size: 320
   R: 4
-  mask_type: equispace_diffusion  # 修改为 'dense' 或 'linear' 或 'sparse'
+  seed: 42
+  mask_type: equispaced_cartesian  # 修改为 'dense' 或 'linear' 或 'sparse'
   center_fraction: 0.08
   patch_size: 4
-  seed: 42
+
 
 
   combine_coil: true
@@ -48,21 +49,25 @@ training:
   timesteps: 19
   loss_type: l1
   batch_size: 8
-  #lambda_dc: 1
-  lr: 5e-5
-  train_num_steps: 7000
+  lambda_dc: 1
+  lr: 1e-4
+  train_num_steps: 200000
   gradient_accumulate_every: 1
   fp16: False
   ema_decay: 0.995
-  step_start_ema: 700
+  step_start_ema: 2000
   update_ema_every: 10
-  save_and_sample_every: 200
-  results_folder: './results_filterdiff_swin_5e-5'
+  save_and_sample_every: 2000
+  results_folder: './results_filterdiff_swin_fastmri'
   filter_schedule_type: dense
-  center_core_size: 26
+  center_core_size: 20
   use_explicit_dc: True
 
-  val_every: 200
-  early_stop_patience: 8
-  early_stop_min_delta: 0.005
+  val_every: 2000
+  early_stop_patience: 10000
+  early_stop_min_delta: 0.0000001
   monitor_metric: psnr
+  image_loss_mode: complex
+  lr_scheduler_type: cosine
+  warmup_steps: 2000
+  min_lr: 1e-6

@@ -53,7 +53,11 @@ class KspaceDiffusion(nn.Module):
         self.num_timesteps = int(timesteps)
         self.loss_type = loss_type
         self.lambda_img = float(kwargs.get("lambda_img", 1.0))
+        self.image_loss_mode = str(kwargs.get("image_loss_mode", "complex")).lower()
         self.use_explicit_dc = bool(use_explicit_dc)
+
+        if self.image_loss_mode not in ["complex", "real", "magnitude"]:
+            raise ValueError(f"Unsupported image_loss_mode: {self.image_loss_mode}")
 
         self.schedule = CenterRectangleSchedule(
             h=image_size,
@@ -139,18 +143,52 @@ class KspaceDiffusion(nn.Module):
         if self.loss_type == 'l1':
             delta_abs = torch.abs(delta_pred - delta_gt)
             loss_delta = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-            loss_img = F.l1_loss(x0_pred, x0)
+
 
         elif self.loss_type == 'l2':
             delta_sq = (delta_pred - delta_gt) ** 2
             loss_delta = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-            loss_img = F.mse_loss(x0_pred, x0)
-
         else:
             raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
+        loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
 
         return loss_delta + self.lambda_img * loss_img
 
+    def _compute_image_losses(self, x0_pred: torch.Tensor, x0: torch.Tensor):
+        """
+        返回：
+          loss_img      : 当前训练真正使用的图像域 loss
+          loss_img_real : 仅 real 部分的 loss（debug 用）
+          loss_img_imag : 仅 imag 部分的 loss（debug 用）
+          loss_img_mag  : magnitude loss（debug 用）
+        """
+        if self.loss_type == 'l1':
+            loss_img_real = F.l1_loss(x0_pred[..., 0], x0[..., 0])
+            loss_img_imag = F.l1_loss(x0_pred[..., 1], x0[..., 1])
+            loss_img_mag = F.l1_loss(fastmri.complex_abs(x0_pred), fastmri.complex_abs(x0))
+        elif self.loss_type == 'l2':
+            loss_img_real = F.mse_loss(x0_pred[..., 0], x0[..., 0])
+            loss_img_imag = F.mse_loss(x0_pred[..., 1], x0[..., 1])
+            loss_img_mag = F.mse_loss(fastmri.complex_abs(x0_pred), fastmri.complex_abs(x0))
+        else:
+            raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
+
+        if self.image_loss_mode == "complex":
+            if self.loss_type == 'l1':
+                loss_img = F.l1_loss(x0_pred, x0)
+            else:
+                loss_img = F.mse_loss(x0_pred, x0)
+
+        elif self.image_loss_mode == "real":
+            loss_img = loss_img_real
+
+        elif self.image_loss_mode == "magnitude":
+            loss_img = loss_img_mag
+
+        else:
+            raise NotImplementedError(f"Unsupported image_loss_mode: {self.image_loss_mode}")
+
+        return loss_img, loss_img_real, loss_img_imag, loss_img_mag
     @torch.no_grad()
     def sample(self, k_c: torch.Tensor, mask: torch.Tensor, mask_fold=None, t=None):
         """
@@ -279,10 +317,12 @@ class KspaceDiffusion(nn.Module):
         x0_pred = self._run_backbone(k_t=k_t, k_c=k_c, m_t=m_t, t=t)
         k0_pred = fastmri.fft2c(x0_pred)
         delta_pred = delta_m * k0_pred
+        # image loss
+        loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
 
         # image loss
         if self.loss_type == 'l1':
-            loss_img = F.l1_loss(x0_pred, x0)
+
             loss_delta_full = F.l1_loss(delta_pred, delta_gt)
 
             delta_abs = torch.abs(delta_pred - delta_gt)
@@ -290,7 +330,7 @@ class KspaceDiffusion(nn.Module):
             loss_delta_support = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
 
         elif self.loss_type == 'l2':
-            loss_img = F.mse_loss(x0_pred, x0)
+
             loss_delta_full = F.mse_loss(delta_pred, delta_gt)
 
             delta_sq = (delta_pred - delta_gt) ** 2
@@ -302,6 +342,10 @@ class KspaceDiffusion(nn.Module):
 
         return {
             "loss_img": float(loss_img.item()),
+            "loss_img_real": float(loss_img_real.item()),
+            "loss_img_imag": float(loss_img_imag.item()),
+            "loss_img_mag": float(loss_img_mag.item()),
+
             "loss_delta_full": float(loss_delta_full.item()),
             "loss_delta_support": float(loss_delta_support.item()),
 

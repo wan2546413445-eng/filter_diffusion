@@ -5,7 +5,7 @@ import numpy as np
 import pickle
 import pathlib
 from torch.utils.data import Dataset
-from mask.sample_mask import RandomMaskFilterDiffusion
+from utils.sample_mask import EquispacedCartesianMask
 from utils.utils import (
     get_all_files,
     fft2c_2d,
@@ -50,7 +50,7 @@ class FastMRIKneeDataSet(Dataset):
         self.slice_mapper = np.cumsum(self.num_slices) - 1
 
         size = (1, config.data.image_size, config.data.image_size)
-        self.mask_func = RandomMaskFilterDiffusion(
+        self.mask_func = EquispacedCartesianMask(
             size=size,
             patch_size=config.data.patch_size,
             seed=config.data.seed

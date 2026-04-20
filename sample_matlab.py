@@ -10,8 +10,8 @@ from tqdm import tqdm
 
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
-from utils.data_transform import DataTransform_Diffusion
-from utils.mri_data import SliceDataset
+from data.data_transform import DataTransform_Diffusion
+from data.mri_data import SliceDataset
 from utils.sample_mask import (
     RandomMaskGaussianDiffusion,
     RandomMaskDiffusion,
