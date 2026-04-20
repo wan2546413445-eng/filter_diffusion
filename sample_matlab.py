@@ -16,6 +16,7 @@ from utils.sample_mask import (
     RandomMaskGaussianDiffusion,
     RandomMaskDiffusion,
     EquiSpaceMaskDiffusion,
+    EquispacedCartesianMask
 )
 from utils.utils import dict2namespace
 
@@ -91,13 +92,12 @@ def build_mask_func(config):
     size = (1, config.data.image_size, config.data.image_size)
     mask_type = config.data.mask_type
 
-    if mask_type == "gaussian_diffusion":
-        return RandomMaskGaussianDiffusion(
+    if mask_type == 'equispaced_cartesian':  # 新增
+        mask_func = EquispacedCartesianMask(
             acceleration=config.data.R,
             center_fraction=config.data.center_fraction,
             size=size,
-            seed=config.data.seed,
-            patch_size=config.data.patch_size,
+            seed=config.data.seed
         )
     elif mask_type == "random_diffusion":
         return RandomMaskDiffusion(

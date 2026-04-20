@@ -560,7 +560,7 @@ class RandomMaskGaussianDiffusion1D:
 
 
 class EquispacedCartesianMask:
-    def __init__(self, acceleration=4, center_fraction=0.08, size=(1,256,256), seed=42):
+    def __init__(self, acceleration=4, center_fraction=0.08, size=(1, 256, 256), seed=42):
         self.acceleration = acceleration
         self.center_fraction = center_fraction
         self.size = size
@@ -568,34 +568,48 @@ class EquispacedCartesianMask:
 
     def __call__(self):
         with temp_seed(np.random, self.seed):
-            _, H, W = self.size
-            mask = np.ones(self.size, dtype=np.float32)
+            B, H, W = self.size
 
-            # 中心低频区域宽度
+            # 1) 中心全采样宽度（对应 M_core）
             num_low_freqs = int(round(W * self.center_fraction))
             pad = (W - num_low_freqs) // 2
-            # 中心区域保持全1（已为1，无需操作）
+            center_start = pad
+            center_end = pad + num_low_freqs
 
-            # 外周等间隔采样：每隔 acceleration 列保留一列，其余置0
-            for col in range(0, W, self.acceleration):
-                # 如果该列不在中心区域内，则置0（中心区域内已为1，跳过）
-                if col < pad or col >= pad + num_low_freqs:
-                    mask[:, :, col] = 0.0
-                else:
-                    # 中心区域内的列全部保留，但按等间隔规则，它们本来就在采样线上
-                    pass
+            # 2) 总采样列数严格按 W / R
+            target_total = int(round(W / self.acceleration))
+            num_outer = max(0, target_total - num_low_freqs)
 
-            # 修正：将外周不在采样线上的列置0
-            # 更简洁的实现：先生成全0，再设置中心区域和采样线
-            mask = np.zeros(self.size, dtype=np.float32)
-            # 中心矩形全采样
-            mask[:, :, pad:pad + num_low_freqs] = 1.0
-            # 外周等间隔采样线
-            for col in range(0, W, self.acceleration):
-                if col < pad or col >= pad + num_low_freqs:
-                    mask[:, :, col] = 1.0
+            # 3) 外围所有可选列
+            outer_cols = np.concatenate([
+                np.arange(0, center_start),
+                np.arange(center_end, W)
+            ])
 
-            # mask_fold 在 FilterDiff 中未使用，返回 dummy
-            mask_fold = np.ones((self.size[0], 1, 1), dtype=np.float32)
+            # 4) 从外围中“等间隔”选出精确 num_outer 列
+            if num_outer > 0:
+                idx = np.round(np.linspace(0, len(outer_cols) - 1, num_outer)).astype(int)
+                sampled_outer = outer_cols[idx]
+                sampled_outer = np.unique(sampled_outer)
+
+                # 防止 unique 后数量变少
+                if len(sampled_outer) < num_outer:
+                    remain = np.setdiff1d(outer_cols, sampled_outer)
+                    sampled_outer = np.concatenate([sampled_outer, remain[:num_outer - len(sampled_outer)]])
+                elif len(sampled_outer) > num_outer:
+                    sampled_outer = sampled_outer[:num_outer]
+            else:
+                sampled_outer = np.array([], dtype=np.int64)
+
+            mask = np.zeros((B, H, W), dtype=np.float32)
+
+            # 中心低频连续保留
+            mask[:, :, center_start:center_end] = 1.0
+            # 外围等间隔保留
+            if len(sampled_outer) > 0:
+                mask[:, :, sampled_outer] = 1.0
+
+            # FilterDiff 里没真正用 fold，先保持兼容
+            mask_fold = np.ones((B, 1, 1), dtype=np.float32)
 
         return mask, mask_fold

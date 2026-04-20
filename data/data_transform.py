@@ -138,7 +138,7 @@ class DataTransform_Diffusion:
         # k-space -> tensor, [Nc,H,W,2]
         kspace = transforms.to_tensor(kspace)
 
-        # ====== Image reshaping ======
+        # ====== Image reshaping ======ifft 到图像域做中心裁剪/缩放，再回到 k-space。
         image_full = fastmri.ifft2c(kspace)  # [Nc,H,W,2]
         image_full = transforms.complex_center_crop(image_full, [320, 320])
 
@@ -191,10 +191,10 @@ class DataTransform_Diffusion:
 
         image_masked = fastmri.ifft2c(masked_kspace)          # [Nc,H,W,2]
         image_masked_abs = fastmri.complex_abs(image_masked)  # [Nc,H,W]
-        max_val = torch.amax(image_masked_abs, dim=(1, 2))    # [Nc]
+        max_val = torch.amax(image_masked_abs)    # [Nc]
         scale_coeff = 1.0 / (max_val + 1e-8)
 
-        kspace = torch.einsum('nhwc,n->nhwc', kspace, scale_coeff)
+        kspace = kspace * scale_coeff
 
         if maps is not None:
             return kspace.float(), mask, mask_fold, maps.float()

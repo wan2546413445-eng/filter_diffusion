@@ -58,7 +58,7 @@ def main():
     else:
         raise ValueError(f"Unsupported mask_type: {mask_type}")
 
-    # ====== 数据变换 ======
+    # ====== 数据变换 ======多线圈sense成单线圈
     combine_coil = config.data.combine_coil if hasattr(config.data, 'combine_coil') else True
     data_transform = DataTransform_Diffusion(
         mask_func,
@@ -166,6 +166,7 @@ def main():
         center_core_size=center_core_size,
         lambda_img=getattr(config.training, 'lambda_img', 1.0),
         use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
+        input_representation=str(getattr(config.training, 'input_representation', 'kspace_raw')),
         image_loss_mode=str(getattr(config.training, 'image_loss_mode', 'complex')),
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架
