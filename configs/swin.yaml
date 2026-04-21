@@ -7,28 +7,23 @@ data:
   R: 4
   seed: 42
   mask_type: equispaced_cartesian
-  center_fraction: 0.08
+  center_fraction: 0.075
   patch_size: 4
-
-
-
   combine_coil: true
 
   # 建议训练时先保持和你之前一致；如果你想全切片训练再改成 0
-  num_skip_slice: 5
-
-  normalize_type: minmax
+  num_skip_slice: 6
   normalize_coeff: 1.0
-  num_workers: 8
+  num_workers: 2
 
   # ========= kspace 路径 =========
   data_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_train_knee/kspace
-  test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
-  val_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
+ #test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
+ #val_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_test/kspace
 
   # 可选：快速 debug 时可手动改成 val
-  # test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
-  #sample_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
+  test_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
+  val_root: /mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace
 
   # ========= maps 根目录 =========
   # 注意：这里填总目录，不是具体某个 maps 子文件夹
@@ -38,32 +33,30 @@ data:
 model:
   backbone: swin_dits
   patch_size: 4
-  hidden_size: 256
-  depth: 8
-  num_heads: 8
+  hidden_size: 192
+  depth: 6
+  num_heads: 4
   window_size: 8
   mlp_ratio: 4.0
-  residual: False
+
 
 training:
-  timesteps: 19
+  timesteps: 20
   loss_type: l1
   batch_size: 8
-  lambda_dc: 1
   lr: 1e-4
-  train_num_steps: 200000
+  train_num_steps: 70000
   gradient_accumulate_every: 1
   fp16: False
   ema_decay: 0.995
   step_start_ema: 2000
   update_ema_every: 10
-  save_and_sample_every: 2000
-  results_folder: './results_filterdiff_swin_fastmri_1
+  save_and_sample_every: 1000
+  results_folder: './results_fastmri_r4_acs24'
   filter_schedule_type: dense
-  center_core_size: 20
-  use_explicit_dc: True
-
-  val_every: 2000
+  center_core_size: 24 #filter end
+  max_val_batches: 20
+  val_every: 1000
   early_stop_patience: 100
   early_stop_min_delta: 0.0000001
   monitor_metric: psnr
@@ -71,4 +64,4 @@ training:
   lr_scheduler_type: cosine
   warmup_steps: 2000
   min_lr: 1e-6
-  input_representation: kspace_logmag_phase   # 推荐先用这个
+  input_representation: kspace_raw   # 推荐先用这个

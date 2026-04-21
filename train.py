@@ -2,6 +2,7 @@
 import argparse
 import yaml
 import torch
+from data.cached_mri_data import CachedSliceDataset
 from torch.utils.data import DataLoader
 import pathlib
 from utils.utils import dict2namespace, setup_seed
@@ -64,38 +65,57 @@ def main():
         mask_func,
         img_size=config.data.image_size,
         combine_coil=combine_coil,
-        flag_singlecoil=False,  # 多线圈数据
+        flag_singlecoil=False,
         maps_root=getattr(config.data, 'maps_root', None),
         map_key=getattr(config.data, 'map_key', 's_maps'),
+        device=None,
     )
     # ====== 训练数据集 ======
     num_skip_slice = config.data.num_skip_slice if hasattr(config.data, 'num_skip_slice') else 6
-    train_dataset = SliceDataset(
+    raw_train_dataset = SliceDataset(
         root=pathlib.Path(config.data.data_root),
         transform=data_transform,
         challenge='multicoil',
-        num_skip_slice=num_skip_slice,  # 一般train和test做跳过前六操作默认设置，配置文件中num_skip_slice 可控制除了6以外的其他跳过切片数量
+        num_skip_slice=num_skip_slice,
     )
+
+    train_dataset = CachedSliceDataset(
+        original_dataset=raw_train_dataset,
+        cache_root="/mnt/SSD/wsy/projects/filter_diffusion/cache/train_cache_24",
+        slice_info_pkl="/mnt/SSD/wsy/projects/HFS-SDE-master/data/data_slice.pkl",
+        force_rebuild=True,
+        num_skip_slice=num_skip_slice,
+    )
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.training.batch_size,
         shuffle=True,
-        num_workers=config.data.num_workers,
-        pin_memory=False,
+        num_workers=0,
+        pin_memory=True,
+        persistent_workers=False,
     )
     # ====== 验证数据集 ======
+    # 验证数据集
     if hasattr(config.data, 'val_root') and config.data.val_root:
-        val_dataset = SliceDataset(
+        raw_val_dataset = SliceDataset(
             root=pathlib.Path(config.data.val_root),
             transform=data_transform,
             challenge='multicoil',
+            num_skip_slice=num_skip_slice,
+        )
+        val_dataset = CachedSliceDataset(
+            original_dataset=raw_val_dataset,
+            cache_root="/mnt/SSD/wsy/projects/filter_diffusion/cache/val_cache",
+            slice_info_pkl="/mnt/SSD/wsy/projects/HFS-SDE-master/data/data_slice.pkl",  # 如果有独立的 val pkl，替换路径
+            force_rebuild=True,  # 首次运行会自动构建，后续直接加载
             num_skip_slice=num_skip_slice,
         )
         val_loader = DataLoader(
             val_dataset,
             batch_size=1,
             shuffle=False,
-            num_workers=config.data.num_workers,
+            num_workers=0,  # 缓存后单进程足够快
             pin_memory=False,
         )
     else:
@@ -115,6 +135,7 @@ def main():
             shuffle=False,
             num_workers=config.data.num_workers,
             pin_memory=False,
+            persistent_workers=True if config.data.num_workers > 0 else False,
         )
     else:
         test_loader = None
@@ -153,7 +174,7 @@ def main():
     center_core_size = getattr(
         config.training,
         'center_core_size',
-        [config.data.image_size, max(1, int(round(config.data.image_size * float(config.data.center_fraction))))]
+        config.data.image_size // config.data.R  # 例如 256 // 4 = 64
     )
     model = KspaceDiffusion(
         denoise_fn=denoise_fn,
@@ -165,8 +186,8 @@ def main():
         schedule_type=getattr(config.training, 'filter_schedule_type', 'dense'),
         center_core_size=center_core_size,
         lambda_img=getattr(config.training, 'lambda_img', 1.0),
-        use_explicit_dc=getattr(config.training, 'use_explicit_dc', False),
-        input_representation=str(getattr(config.training, 'input_representation', 'kspace_raw')),
+
+
         image_loss_mode=str(getattr(config.training, 'image_loss_mode', 'complex')),
     ).to(device)
     # 网络结构不等于扩散逻辑！！u-net作为去噪/预测网络，可以修改，KspaceDiffusion是扩散框架

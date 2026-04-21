@@ -41,24 +41,19 @@ model:
 
 
 training:
-  timesteps: 19
+  timesteps: 20
   loss_type: l1
   batch_size: 8
   lambda_dc: 1
   lr: 1e-4
-  train_num_steps: 50000
+  train_num_steps: 10000
   gradient_accumulate_every: 1
   fp16: False
   ema_decay: 0.995
-  step_start_ema: 5000
+  step_start_ema: 1000
   update_ema_every: 10
   save_and_sample_every: 1000
   results_folder: './results_filterdiff_dense'
   filter_schedule_type: dense
   center_core_size: 26
   use_explicit_dc: True
-
-  val_every: 1000
-  early_stop_patience: 8
-  early_stop_min_delta: 0.005
-  monitor_metric: psnr

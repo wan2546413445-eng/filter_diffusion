@@ -14,9 +14,8 @@ from utils.utils import dict2namespace
 from data.mri_data import SliceDataset
 from data.data_transform import DataTransform_Diffusion
 from utils.sample_mask import (
-    RandomMaskGaussianDiffusion,
     RandomMaskDiffusion,
-    EquiSpaceMaskDiffusion,
+    EquiSpaceMaskDiffusion, EquispacedCartesianMask,
 )
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
@@ -56,7 +55,7 @@ def build_model(config, device):
     center_core_size = getattr(
         config.training,
         "center_core_size",
-        [config.data.image_size, max(1, int(round(config.data.image_size * float(config.data.center_fraction))))]
+        config.data.image_size // config.data.R
     )
 
     model = KspaceDiffusion(
@@ -69,7 +68,7 @@ def build_model(config, device):
         schedule_type=getattr(config.training, "filter_schedule_type", "dense"),
         center_core_size=center_core_size,
         lambda_img=getattr(config.training, "lambda_img", 1.0),
-        use_explicit_dc=getattr(config.training, "use_explicit_dc", False),
+        image_loss_mode=str(getattr(config.training, "image_loss_mode", "complex")),
     ).to(device)
 
     return model
@@ -78,13 +77,12 @@ def build_dataset(config, data_root):
     size = (1, config.data.image_size, config.data.image_size)
 
     mask_type = config.data.mask_type
-    if mask_type == "gaussian_diffusion":
-        mask_func = RandomMaskGaussianDiffusion(
+    if mask_type == "equispaced_cartesian":
+        mask_func = EquispacedCartesianMask(
             acceleration=config.data.R,
             center_fraction=config.data.center_fraction,
             size=size,
             seed=config.data.seed,
-            patch_size=config.data.patch_size,
         )
     elif mask_type == "random_diffusion":
         mask_func = RandomMaskDiffusion(

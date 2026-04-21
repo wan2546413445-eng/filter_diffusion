@@ -116,5 +116,7 @@ class CenterRectangleSchedule:
     def get_by_t(self, t: torch.Tensor, device=None, dtype=torch.float32) -> torch.Tensor:
         if t.dtype != torch.long:
             t = t.long()
-        m = self.masks.to(device=device, dtype=dtype)
+        # 优先使用传入的device，若为None则使用t的device
+        target_device = device if device is not None else t.device
+        m = self.masks.to(device=target_device, dtype=dtype)
         return m.index_select(0, t)

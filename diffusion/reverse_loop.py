@@ -1,17 +1,17 @@
 import torch
 import fastmri
 
-from diffusion.dc import explicit_data_consistency
-
 
 def run_reverse_loop(
     model,
     k_t,
     k_c,
     acq_mask,
+
+
     schedule,
     timesteps: int,
-    use_explicit_dc: bool = False,
+
 ):
     """
     Reverse loop with image-domain conditioning:
@@ -41,11 +41,8 @@ def run_reverse_loop(
         m_t_ch = m_t.expand(-1, ncoil, -1, -1, -1)
 
         # keep inference input representation consistent with training
-        x_t = fastmri.ifft2c(cur_k)
-        x_c = fastmri.ifft2c(k_c)
-
-        cur_in = x_t.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
-        kc_in = x_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
+        cur_in = cur_k.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
+        kc_in = k_c.reshape(bsz * ncoil, h, w, 2).permute(0, 3, 1, 2)
         mt_in = m_t_ch.reshape(bsz * ncoil, h, w, 1).permute(0, 3, 1, 2)
 
         model_in = torch.cat([cur_in, kc_in, mt_in], dim=1)
@@ -59,9 +56,7 @@ def run_reverse_loop(
         if direct_recons is None:
             direct_recons = k_pred
 
-        if use_explicit_dc:
-            cur_k = explicit_data_consistency(k_pred, k_c, acq_mask)
-        else:
-            cur_k = k_pred
+
+        cur_k = k_pred
 
     return cur_k, direct_recons

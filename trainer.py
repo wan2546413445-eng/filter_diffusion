@@ -2,6 +2,7 @@
 import math
 import copy
 import torch
+
 import torch.nn.functional as F
 from functools import partial
 from pathlib import Path
@@ -302,17 +303,15 @@ class Trainer:
 
         acc_loss = 0.0
         pbar = tqdm(
-            range(self.train_num_steps),
-            desc='Loss=0.000000',
+            total=self.train_num_steps,
             ascii=True,
-            dynamic_ncols=False,
-            ncols=100,
+            dynamic_ncols=True,
             mininterval=0.5,
             leave=True,
-            file=sys.stdout
+            file=sys.stdout,
         )
 
-        for step in pbar:
+        for step in range(self.train_num_steps):
             self.step = step
             self._set_lr(self._compute_lr(step))
             u_loss = 0.0
@@ -324,7 +323,6 @@ class Trainer:
                 kspace = kspace.to(self.device)
                 mask = mask.to(self.device)
                 mask_fold = mask_fold.to(self.device)
-
                 if maps is not None:
                     maps = maps.to(self.device)
 
@@ -341,9 +339,21 @@ class Trainer:
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
-            # 保留你原来喜欢的显示风格：左边直接显示 Loss=...
             current_lr = self.opt.param_groups[0]['lr']
-            pbar.set_description(f"Loss={train_loss:.6f} | LR={current_lr:.6e}")
+
+            # 实时进度条：只更新条本身，不单独留行
+            pbar.set_postfix(
+                loss=f"{train_loss:.6f}",
+                lr=f"{current_lr:.6e}",
+            )
+            pbar.update(1)
+
+            # 每1000步固定留一行日志
+            if self.step != 0 and self.step % 1000 == 0:
+                self._log(
+                    f"[TRAIN] step={self.step}/{self.train_num_steps} | "
+                    f"loss={train_loss:.6f} | lr={current_lr:.6e}"
+                )
 
             if self.step != 0 and self.step % self.save_and_sample_every == 0:
                 mean_loss = acc_loss / (self.save_and_sample_every + 1)
@@ -398,8 +408,10 @@ class Trainer:
                             f"best {self.monitor_metric}={self.best_metric:.6f}"
                         )
                         self.save(self.step)
+                        pbar.close()
                         return
 
+        pbar.close()
         self.save(self.step + 1)
         self._log('training completed')
 

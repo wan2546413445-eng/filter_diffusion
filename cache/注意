@@ -1,0 +1,42 @@
+如果你下次训练数据口径没变，就不用改，直接继续用同一个 cache 就行。
+但只要下面这些东西有任何一个变了，就建议重建 cache，或者至少换一个新的 cache_root。
+force_rebuild=False,（不重建，重建改成True)
+会影响 cache 的关键项有：
+
+num_skip_slice 变了
+data_root 变了
+maps_root 变了
+img_size 变了
+combine_coil 变了
+mask_func / mask_type / R / center_fraction 变了
+DataTransform_Diffusion 的处理逻辑改了
+mri_data.py 的切片筛选逻辑改了
+
+cache 存的不是原始 h5 路径，而是已经 transform 完的 sample。也就是 original_dataset[idx] 的结果直接被 torch.save 下来了。
+
+所以只要 transform 口径变了，旧 cache 就不是“同一份数据”了。
+
+
+可以直接复用 cache 的情况
+
+
+重新训练一遍
+改了学习率
+改了 batch size
+改了 backbone（unet / swin）
+改了 timesteps
+改了 loss 权重
+
+
+
+必须重建 cache 的情况
+
+
+
+只跳前 6 张 / 前后跳
+图像尺寸
+coil combine 方式
+map 读取方式
+mask 生成方式
+
+这些都会影响 sample 内容，旧 cache 就不该继续用。

@@ -124,7 +124,7 @@ class SliceDataset(torch.utils.data.Dataset):
         dataset_cache_file: Union[str, Path, os.PathLike] = "dataset_cache.pkl",
         num_cols: Optional[Tuple[int]] = None,
         raw_sample_filter: Optional[Callable] = None,
-        num_skip_slice: Optional[int] = None,  # number of slices to skip for start and end
+        num_skip_slice: Optional[int] = None,  # number of slices to skip only at the start
     ):
         """
         Args:
@@ -152,8 +152,8 @@ class SliceDataset(torch.utils.data.Dataset):
             raw_sample_filter: Optional; A callable object that takes an raw_sample
                 metadata as input and returns a boolean indicating whether the
                 raw_sample should be included in the dataset.
-            num_skip_slice(Added by Guoyao): Optional; A int indicate the number of slices to skip for both start
-                and end. This can help skip slices large or pure background noises.
+           num_skip_slice(Added by Guoyao): Optional; An int indicating the number of slices to skip only at
+    the start of each volume.
         """
         if challenge not in ("singlecoil", "multicoil"):
             raise ValueError('challenge should be either "singlecoil" or "multicoil"')
@@ -197,9 +197,9 @@ class SliceDataset(torch.utils.data.Dataset):
 
                 new_raw_samples = []
                 for slice_ind in range(num_slices):
-                    # skip boundary slices if indicated, added by Guoyao
+                    # 只跳过前 num_skip_slice 张，不跳过尾部
                     if num_skip_slice is not None:
-                        if slice_ind < num_skip_slice or slice_ind >= (num_slices - num_skip_slice):
+                        if slice_ind < num_skip_slice:
                             continue
 
                     raw_sample = FastMRIRawDataSample(fname, slice_ind, metadata)
