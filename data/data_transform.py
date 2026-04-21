@@ -1,17 +1,12 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.io import loadmat
-import os
 import pathlib
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torchvision.transforms as T
 import h5py
 import fastmri
 from fastmri.data import subsample, transforms, mri_data
-from help_func import print_var_detail
+
 
 def complex_abs_sq(x: torch.Tensor) -> torch.Tensor:
     """
@@ -225,18 +220,3 @@ class DataTransform_Diffusion:
         else:
             return kspace.float(), mask, mask_fold
 
-def apply_mask(data, mask_func):
-    '''
-    data: [Nc,H,W,2]
-    mask_func: return [Nc(1),H,W]
-    '''
-    # mask, _ = mask_func()
-    mask_return = mask_func()
-    if len(mask_return) == 1:
-        mask = mask_func()
-    else:
-        mask, _ = mask_func()
-    mask = torch.from_numpy(mask)
-    mask = mask[..., None]  # [Nc(1),H,W,1]
-    masked_data = data * mask + 0.0  # the + 0.0 removes the sign of the zeros
-    return masked_data, mask

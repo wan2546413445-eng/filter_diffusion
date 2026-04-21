@@ -13,10 +13,7 @@ import fastmri
 from utils.utils import dict2namespace
 from data.mri_data import SliceDataset
 from data.data_transform import DataTransform_Diffusion
-from utils.sample_mask import (
-    RandomMaskDiffusion,
-    EquiSpaceMaskDiffusion, EquispacedCartesianMask,
-)
+
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from models.restoration_net_filterdiff import build_filterdiff_restoration_net
@@ -74,42 +71,23 @@ def build_model(config, device):
     return model
 
 def build_dataset(config, data_root):
-    size = (1, config.data.image_size, config.data.image_size)
-
-    mask_type = config.data.mask_type
-    if mask_type == "equispaced_cartesian":
-        mask_func = EquispacedCartesianMask(
-            acceleration=config.data.R,
-            center_fraction=config.data.center_fraction,
-            size=size,
-            seed=config.data.seed,
-        )
-    elif mask_type == "random_diffusion":
-        mask_func = RandomMaskDiffusion(
-            center_fraction=config.data.center_fraction,
-            acceleration=config.data.R,
-            size=size,
-            seed=config.data.seed,
-        )
-    elif mask_type == "equispace_diffusion":
-        mask_func = EquiSpaceMaskDiffusion(
-            center_fraction=config.data.center_fraction,
-            acceleration=config.data.R,
-            size=size,
-            seed=config.data.seed,
-        )
-    else:
-        raise ValueError(f"Unsupported mask_type: {mask_type}")
-
     combine_coil = getattr(config.data, "combine_coil", True)
 
+    acq_mask_path = getattr(config.data, "acq_mask_path", None)
+    acq_mask_key = getattr(config.data, "acq_mask_key", "mask")
+    acq_mask_fold_path = getattr(config.data, "acq_mask_fold_path", None)
+    acq_mask_fold_key = getattr(config.data, "acq_mask_fold_key", "mask_fold")
+
     data_transform = DataTransform_Diffusion(
-        mask_func,
         img_size=config.data.image_size,
         combine_coil=combine_coil,
         flag_singlecoil=False,
         maps_root=getattr(config.data, "maps_root", None),
         map_key=getattr(config.data, "map_key", "s_maps"),
+        fixed_mask_path=acq_mask_path,
+        fixed_mask_key=acq_mask_key,
+        fixed_mask_fold_path=acq_mask_fold_path,
+        fixed_mask_fold_key=acq_mask_fold_key,
     )
 
     dataset = SliceDataset(
@@ -196,17 +174,17 @@ def extract_step(path_obj: pathlib.Path):
 
 def main():
     class DebugArgs:
-        config = "configs/base.yaml"
-        ckpt_dir = "/mnt/SSD/wsy/projects/filter_diffusion/results_filterdiff_dc"
+        config = "configs/swin.yaml"
+        ckpt_dir = "/mnt/SSD/wsy/projects/filter_diffusion/results_fastmri_r4_acs24"
         val_root = "/mnt/SSD/wsy/projects/HFS-SDE-master/data/multicoil_val/kspace"
         t = 20
         select_by = "psnr"
         max_cases = 20
         save_csv = "filterdiff_ckpt_scan.csv"
         pattern = "model_*.pt"
-        stride = 100
-        start_step = 100
-        end_step = 10000
+        stride = 1000
+        start_step = 1000
+        end_step = 70000
 
     if len(sys.argv) == 1:
         args = DebugArgs()
