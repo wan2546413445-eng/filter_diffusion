@@ -56,6 +56,9 @@ class DataTransform_Diffusion:
         self.fixed_mask = None
         self.fixed_mask_fold = None
 
+        if fixed_mask_path is None:
+            raise ValueError("fixed_mask_path must be provided for fixed-mask experiments.")
+
         if fixed_mask_path is not None:
             self.fixed_mask = self._load_fixed_mask(fixed_mask_path, fixed_mask_key)
 
@@ -176,19 +179,14 @@ class DataTransform_Diffusion:
         if (not self.flag_singlecoil) and (self.maps_root is not None):
             maps = self._load_maps(filename, slice_num)  # [Nc,H,W,2]
 
-        if self.fixed_mask is not None:
-            mask = self.fixed_mask.clone()
-            mask_fold = self.fixed_mask_fold.clone()
-        else:
-            mask = self.fixed_mask.clone()
-            mask_fold = self.fixed_mask_fold.clone()
-            mask = torch.from_numpy(mask).float()
-            mask_fold = torch.from_numpy(mask_fold).float()
 
+
+        mask = self.fixed_mask.clone()
+        mask_fold = self.fixed_mask_fold.clone()
 
         # ==========================================================
         # 分支1：map-aware coil combine -> 单张复图
-        # ==========================================================
+
         if self.combine_coil:
             if maps is None:
                 raise ValueError("combine_coil=True requires valid sensitivity maps.")

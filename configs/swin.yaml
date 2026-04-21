@@ -6,7 +6,7 @@ data:
   image_size: 320
   R: 4
   seed: 42
-  mask_type: equispaced_cartesian
+
   center_fraction: 0.075
   patch_size: 4
   combine_coil: true
