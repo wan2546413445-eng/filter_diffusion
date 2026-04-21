@@ -10,6 +10,10 @@ data:
   center_fraction: 0.075
   patch_size: 4
   combine_coil: true
+  acq_mask_path: /mnt/SSD/wsy/projects/filter_diffusion/mask/uniform_acc4_acs24.mat
+  acq_mask_key: mask
+  acq_mask_fold_path: null
+  acq_mask_fold_key: mask_fold
 
   # 建议训练时先保持和你之前一致；如果你想全切片训练再改成 0
   num_skip_slice: 6

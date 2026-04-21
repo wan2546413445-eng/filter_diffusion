@@ -8,7 +8,7 @@ import pathlib
 from utils.utils import dict2namespace, setup_seed
 from data.mri_data import SliceDataset
 from data.data_transform import DataTransform_Diffusion
-from utils.sample_mask import EquispacedCartesianMask, RandomMaskDiffusion, EquiSpaceMaskDiffusion
+
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from trainer import Trainer
@@ -33,42 +33,26 @@ def main():
     setup_seed(config.seed)
 
     # ====== 初始化掩码生成器 ======
-    size = (1, config.data.image_size, config.data.image_size)
-    mask_type = config.data.mask_type
-    if mask_type == 'equispaced_cartesian':  # 新增
-        mask_func = EquispacedCartesianMask(
-            acceleration=config.data.R,
-            center_fraction=config.data.center_fraction,
-            size=size,
-            seed=config.data.seed
-        )
-    elif mask_type == 'random_diffusion':
-        mask_func = RandomMaskDiffusion(
-            center_fraction=config.data.center_fraction,
-            acceleration=config.data.R,
-            size=size,
-            seed=config.data.seed
-        )
-    elif mask_type == 'equispace_diffusion':
-        mask_func = EquiSpaceMaskDiffusion(
-            center_fraction=config.data.center_fraction,
-            acceleration=config.data.R,
-            size=size,
-            seed=config.data.seed
-        )
-    else:
-        raise ValueError(f"Unsupported mask_type: {mask_type}")
+
+
+    acq_mask_path = getattr(config.data, 'acq_mask_path', None)
+    acq_mask_key = getattr(config.data, 'acq_mask_key', 'mask')
+    acq_mask_fold_path = getattr(config.data, 'acq_mask_fold_path', None)
+    acq_mask_fold_key = getattr(config.data, 'acq_mask_fold_key', 'mask_fold')
 
     # ====== 数据变换 ======多线圈sense成单线圈
     combine_coil = config.data.combine_coil if hasattr(config.data, 'combine_coil') else True
     data_transform = DataTransform_Diffusion(
-        mask_func,
         img_size=config.data.image_size,
         combine_coil=combine_coil,
         flag_singlecoil=False,
         maps_root=getattr(config.data, 'maps_root', None),
         map_key=getattr(config.data, 'map_key', 's_maps'),
         device=None,
+        fixed_mask_path=acq_mask_path,
+        fixed_mask_key=acq_mask_key,
+        fixed_mask_fold_path=acq_mask_fold_path,
+        fixed_mask_fold_key=acq_mask_fold_key,
     )
     # ====== 训练数据集 ======
     num_skip_slice = config.data.num_skip_slice if hasattr(config.data, 'num_skip_slice') else 6

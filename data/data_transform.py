@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+from scipy.io import loadmat
 import os
 import pathlib
 
@@ -33,15 +33,19 @@ def sense_combine_torch(coil_imgs: torch.Tensor, maps: torch.Tensor, eps: float 
 class DataTransform_Diffusion:
     def __init__(
             self,
-            mask_func,
+
             img_size=320,
             combine_coil=True,
             flag_singlecoil=False,
             maps_root=None,
             map_key="s_maps",
-            device=None,          # 新增：GPU设备
+            device=None,
+            fixed_mask_path=None,
+            fixed_mask_key="mask",
+            fixed_mask_fold_path=None,
+            fixed_mask_fold_key="mask_fold",
     ):
-        self.mask_func = mask_func
+
         self.img_size = img_size
         self.combine_coil = combine_coil
         self.flag_singlecoil = flag_singlecoil
@@ -49,8 +53,40 @@ class DataTransform_Diffusion:
         self.map_key = map_key
         self.device = device
 
+        self.fixed_mask = None
+        self.fixed_mask_fold = None
+
+        if fixed_mask_path is not None:
+            self.fixed_mask = self._load_fixed_mask(fixed_mask_path, fixed_mask_key)
+
+            if fixed_mask_fold_path is not None:
+                self.fixed_mask_fold = self._load_fixed_mask(
+                    fixed_mask_fold_path, fixed_mask_fold_key
+                )
+            else:
+                self.fixed_mask_fold = self.fixed_mask.clone()
+
         if flag_singlecoil:
             self.combine_coil = True
+
+    def _load_fixed_mask(self, mat_path, key):
+        mat = loadmat(mat_path)
+        if key not in mat:
+            raise KeyError(f"{key} not found in {mat_path}")
+
+        mask = mat[key]
+
+        if mask.ndim == 2:
+            mask = mask[None, ...]
+        elif mask.ndim == 3 and mask.shape[0] != 1:
+            raise ValueError(f"mask shape must be [H,W] or [1,H,W], got {mask.shape}")
+
+        if mask.shape[-2:] != (self.img_size, self.img_size):
+            raise ValueError(
+                f"fixed mask spatial size {mask.shape[-2:]} != img_size {(self.img_size, self.img_size)}"
+            )
+
+        return torch.from_numpy(mask.astype(np.float32))
 
     def _resolve_map_file(self, filename):
         if self.maps_root is None:
@@ -140,10 +176,14 @@ class DataTransform_Diffusion:
         if (not self.flag_singlecoil) and (self.maps_root is not None):
             maps = self._load_maps(filename, slice_num)  # [Nc,H,W,2]
 
-
-        mask, mask_fold = self.mask_func()  # mask: [1,H,W], mask_fold: [1,h,w]
-        mask = torch.from_numpy(mask).float()
-        mask_fold = torch.from_numpy(mask_fold).float()
+        if self.fixed_mask is not None:
+            mask = self.fixed_mask.clone()
+            mask_fold = self.fixed_mask_fold.clone()
+        else:
+            mask = self.fixed_mask.clone()
+            mask_fold = self.fixed_mask_fold.clone()
+            mask = torch.from_numpy(mask).float()
+            mask_fold = torch.from_numpy(mask_fold).float()
 
 
         # ==========================================================
