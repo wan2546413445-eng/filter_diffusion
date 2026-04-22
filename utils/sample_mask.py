@@ -590,3 +590,18 @@ class EquispacedCartesianMask:
             mask_fold = np.ones((B, 1, 1), dtype=np.float32)
 
         return mask, mask_fold
+
+def build_cartesian_mask(H, W, acc=4, acs=24):
+    mask = np.zeros((H, W), dtype=np.float32)
+    center = W // 2
+    l = center - acs // 2
+    r = l + acs
+    mask[:, l:r] = 1.0
+
+    num_cols = W // acc
+    candidates = list(range(0, l)) + list(range(r, W))
+    np.random.shuffle(candidates)
+    keep = max(0, num_cols - acs)
+    keep_cols = candidates[:keep]
+    mask[:, keep_cols] = 1.0
+    return mask

@@ -134,22 +134,12 @@ class KspaceDiffusion(nn.Module):
 
         # Eq.8 losses
         # 只在 DeltaM support 上计算 delta loss，避免被整幅图均值稀释
-        delta_mask = delta_m.abs()  # [B,1,H,W,1]
-        delta_mask = delta_mask.expand(-1, delta_pred.shape[1], -1, -1, delta_pred.shape[-1])  # [B,Nc,H,W,2]
 
-        if self.loss_type == 'l1':
-            delta_abs = torch.abs(delta_pred - delta_gt)
-            loss_delta = (delta_abs * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-
-
-        elif self.loss_type == 'l2':
-            delta_sq = (delta_pred - delta_gt) ** 2
-            loss_delta = (delta_sq * delta_mask).sum() / (delta_mask.sum() + 1e-8)
-        else:
-            raise NotImplementedError(f"Unsupported loss type: {self.loss_type}")
         loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
+        loss_delta = F.l1_loss(delta_pred, delta_gt)
+        loss=loss_delta + self.lambda_img * loss_img
 
-        return loss_delta + self.lambda_img * loss_img
+        return loss
 
     def _compute_image_losses(self, x0_pred: torch.Tensor, x0: torch.Tensor):
         """
