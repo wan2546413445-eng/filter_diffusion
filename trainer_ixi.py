@@ -288,7 +288,18 @@ class Trainer:
                 mask = mask.to(self.device, non_blocking=True)
                 mask_fold = mask_fold.to(self.device, non_blocking=True)
 
-                loss = self.model(kspace, mask, mask_fold)
+                out = self.model(kspace, mask, mask_fold, return_components=True)
+                if isinstance(out, dict):
+                    loss = out["loss_total"]
+                    loss_delta = float(out["loss_delta"].item())
+                    loss_img = float(out["loss_img"].item())
+                    delta_support_ratio = float(out["delta_support_ratio"].item())
+                else:
+                    loss = out
+                    loss_delta = float("nan")
+                    loss_img = float("nan")
+                    delta_support_ratio = float("nan")
+
                 u_loss += loss.item()
                 backwards(loss / self.gradient_accumulate_every, self.opt)
                 last_grad = grad_stats(self.model)
@@ -310,6 +321,9 @@ class Trainer:
                 self._log(
                     f'[TRAIN-DBG] step={self.step} | '
                     f'loss={train_loss:.6f} | '
+                    f'loss_k={loss_delta:.6f} | '
+                    f'loss_x={loss_img:.6f} | '
+                    f'delta_support={delta_support_ratio:.6f} | '
                     f'grad_mean_sum={last_grad["grad_mean_sum"]:.6e} | '
                     f'grad_max={last_grad["grad_max"]:.6e} | '
                     f'lr={current_lr:.6e}'
