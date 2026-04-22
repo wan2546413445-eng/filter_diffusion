@@ -11,37 +11,37 @@ from data.ixi_singlecoil_dataset import IXISinglecoilSliceDataset
 from diffusion.kspace_diffusion import KspaceDiffusion
 from models.unet_diffusion import Unet
 from models.restoration_net_filterdiff import build_filterdiff_restoration_net
-from trainer import Trainer
+from trainer_ixi import Trainer
 
 
 def build_mask_func(config):
     size = (1, config.data.image_size, config.data.image_size)
     mask_type = config.data.mask_type
-    seed = getattr(config.data, "seed", getattr(config, "seed", 42))
+    seed = getattr(config.data, 'seed', getattr(config, 'seed', 42))
 
-    if mask_type == 'equispaced_cartesian':  # 新增
+    if mask_type == 'equispaced_cartesian':
         return EquispacedCartesianMask(
             acceleration=config.data.R,
             center_fraction=config.data.center_fraction,
             size=size,
-            seed=seed
+            seed=seed,
         )
     elif mask_type == 'random_diffusion':
         return RandomMaskDiffusion(
             center_fraction=config.data.center_fraction,
             acceleration=config.data.R,
             size=size,
-            seed=seed
+            seed=seed,
         )
     elif mask_type == 'equispace_diffusion':
         return EquiSpaceMaskDiffusion(
             center_fraction=config.data.center_fraction,
             acceleration=config.data.R,
             size=size,
-            seed=seed
+            seed=seed,
         )
     else:
-        raise ValueError(f"Unsupported mask_type: {mask_type}")
+        raise ValueError(f'Unsupported mask_type: {mask_type}')
 
 
 def build_backbone(config, device):
@@ -54,9 +54,8 @@ def build_backbone(config, device):
             channels=5,
             dim_mults=tuple(config.model.dim_mults),
             with_time_emb=True,
-            residual=config.model.residual
+            residual=config.model.residual,
         ).to(device)
-
     elif backbone == 'swin_dits':
         return build_filterdiff_restoration_net(
             img_size=config.data.image_size,
@@ -71,7 +70,7 @@ def build_backbone(config, device):
             with_time_emb=True,
         ).to(device)
     else:
-        raise ValueError(f"Unsupported backbone: {backbone}")
+        raise ValueError(f'Unsupported backbone: {backbone}')
 
 
 def main():
@@ -113,26 +112,31 @@ def main():
         normalize_mode=config.data.normalize_mode,
     )
 
+    persistent_workers = bool(config.data.num_workers > 0)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.training.batch_size,
         shuffle=True,
         num_workers=config.data.num_workers,
-        pin_memory=False,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=1,
         shuffle=False,
         num_workers=config.data.num_workers,
-        pin_memory=False,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=1,
         shuffle=False,
         num_workers=config.data.num_workers,
-        pin_memory=False,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
     )
 
     denoise_fn = build_backbone(config, device)
@@ -177,7 +181,6 @@ def main():
         lr_scheduler_type=str(getattr(config.training, 'lr_scheduler_type', 'none')),
         warmup_steps=int(getattr(config.training, 'warmup_steps', 0)),
         min_lr=float(getattr(config.training, 'min_lr', 0.0)),
-
         val_every=int(getattr(config.training, 'val_every', 500)),
         early_stop_patience=int(getattr(config.training, 'early_stop_patience', 10)),
         early_stop_min_delta=float(getattr(config.training, 'early_stop_min_delta', 1e-4)),
@@ -193,5 +196,5 @@ def main():
         trainer.test(t=config.training.timesteps, num_samples=1)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

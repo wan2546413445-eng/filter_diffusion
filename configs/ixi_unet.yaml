@@ -6,22 +6,22 @@ data:
   val_root: /mnt/SSD/wsy/data/val
   test_root: /mnt/SSD/wsy/data/test
 
-
   image_size: 256
   num_workers: 4
-  num_skip_slice: 10
-  normalize_mode: percentile
+  num_skip_slice: 20
+  normalize_mode: max
 
   mask_type: equispaced_cartesian
   R: 4
-  center_fraction: 0.08
+  center_fraction: 0.09375
   patch_size: 1
 
 model:
   backbone: unet
   dim: 64
   dim_mults: [1, 2, 4, 8]
-  residual: False
+  residual: false
+
 training:
   timesteps: 19
   loss_type: l1
@@ -29,20 +29,26 @@ training:
   lr: 1e-4
   train_num_steps: 10000
   gradient_accumulate_every: 1
-  fp16: False
+  fp16: false
 
   ema_decay: 0.995
   step_start_ema: 1000
   update_ema_every: 10
-  save_and_sample_every: 500
-  results_folder: ./results_ixi_unet
+  save_and_sample_every: 1000
+  results_folder: ./results_ixi_unet_only
 
   filter_schedule_type: dense
-  center_core_size: 13
-  use_explicit_dc: True
+  center_core_size: 24
+  use_explicit_dc: true
+  image_loss_mode: complex
+  lambda_img: 1.0
 
-  val_every: 100
-  max_val_batches: 100
-  early_stop_patience: 12
-  early_stop_min_delta: 0.002
+  lr_scheduler_type: none
+  warmup_steps: 0
+  min_lr: 0.0
+
+  val_every: 1000
+  max_val_batches: 50
+  early_stop_patience: 10
+  early_stop_min_delta: 0.001
   monitor_metric: psnr

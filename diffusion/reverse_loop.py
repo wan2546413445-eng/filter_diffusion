@@ -55,8 +55,8 @@ def run_reverse_loop(
         delta_k = delta_mask * fastmri.fft2c(x0_pred)
         k_pred = cur_k + delta_k
 
-        # 显式数据一致性：只锁定已观测位置
-        #k_pred = explicit_data_consistency(k_pred, k_c, acq_mask)
+        #显式数据一致性：只锁定已观测位置
+        k_pred = explicit_data_consistency(k_pred, k_c, acq_mask)
 
         if direct_recons is None:
             direct_recons = k_pred

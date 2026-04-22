@@ -559,38 +559,44 @@ class RandomMaskGaussianDiffusion1D:
         )
 
 class EquispacedCartesianMask:
-    def __init__(self, acceleration=4, center_fraction=None, size=(1, 256, 256), seed=42):
+    def __init__(self, acceleration=4, center_fraction=0.08, size=(1, 256, 256), seed=42):
         self.acceleration = acceleration
-        self.center_fraction = center_fraction if center_fraction is not None else 1.0 / acceleration
+        self.center_fraction = center_fraction
         self.size = size
         self.seed = seed
 
     def __call__(self):
-        with temp_seed(np.random, self.seed):
-            B, H, W = self.size
+        B, H, W = self.size
+        num_low_freqs = int(round(W * self.center_fraction))
+        num_keep_total = int(round(W / self.acceleration))
 
-            # 中心低频全采样宽度
-            num_low_freqs = int(round(W * self.center_fraction))
-            pad = (W - num_low_freqs) // 2
-            center_start = pad
-            center_end = pad + num_low_freqs
+        if num_low_freqs > num_keep_total:
+            raise ValueError(
+                f"center region ({num_low_freqs}) is larger than total samples ({num_keep_total})"
+            )
 
-            mask = np.zeros((B, H, W), dtype=np.float32)
+        pad = (W - num_low_freqs) // 2
+        center_start = pad
+        center_end = pad + num_low_freqs
 
-            # 1) 中心矩形全采样
-            mask[:, :, center_start:center_end] = 1.0
+        mask = np.zeros((B, H, W), dtype=np.float32)
 
-            # 2) 外周等间隔采样（每隔 acceleration 列取一列）
-            for col in range(0, W, self.acceleration):
-                # 如果该列不在中心区域内，则保留
-                if col < center_start or col >= center_end:
-                    mask[:, :, col] = 1.0
+        # 中心低频全保留
+        mask[:, :, center_start:center_end] = 1.0
 
-            # mask_fold 占位
-            mask_fold = np.ones((B, 1, 1), dtype=np.float32)
+        # 外围还需要保留多少列
+        num_outer_keep = num_keep_total - num_low_freqs
+        outer_cols = list(range(0, center_start)) + list(range(center_end, W))
 
+        if num_outer_keep > 0:
+            step = len(outer_cols) / float(num_outer_keep)
+            keep_idx = [outer_cols[min(int(round(i * step)), len(outer_cols) - 1)] for i in range(num_outer_keep)]
+            keep_idx = sorted(list(set(keep_idx)))
+            mask[:, :, keep_idx] = 1.0
+
+        # 这里只保留兼容接口
+        mask_fold = np.ones((B, 1, 1), dtype=np.float32)
         return mask, mask_fold
-
 def build_cartesian_mask(H, W, acc=4, acs=24):
     mask = np.zeros((H, W), dtype=np.float32)
     center = W // 2

@@ -1,0 +1,21 @@
+seed: 42
+device: 'cuda'
+
+data:
+  dataset_name: ixi
+  data_root: /mnt/SSD/wsy/data/train
+  image_size: 256
+  num_workers: 4
+  challenge: singlecoil
+
+
+mask:
+  acc: 4
+  acs: 24
+
+model:
+  in_channels: 2
+  out_channels: 2
+
+eval:
+  save_recon: true
