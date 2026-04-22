@@ -103,7 +103,27 @@ class KspaceDiffusion(nn.Module):
         x0_pred = self.denoise_fn(model_in, t_in)
         return x0_pred.permute(0, 2, 3, 1).reshape(bsz, ncoil, h, w, 2)
 
-    def p_losses(self, kspace: torch.Tensor, mask: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _masked_l1_complex(pred: torch.Tensor, target: torch.Tensor, mask_1ch: torch.Tensor) -> torch.Tensor:
+        """
+        Compute mean L1 only on mask support.
+
+        pred/target: [B, Nc, H, W, 2]
+        mask_1ch:    [B, 1,  H, W, 1] with {0,1}
+        """
+        abs_err = torch.abs(pred - target)  # [B,Nc,H,W,2]
+        weighted = abs_err * mask_1ch
+        denom = mask_1ch.sum() * pred.shape[1] * pred.shape[-1]  # coils * complex(2)
+        denom = torch.clamp(denom, min=1.0)
+        return weighted.sum() / denom
+
+    def p_losses(
+            self,
+            kspace: torch.Tensor,
+            mask: torch.Tensor,
+            t: torch.Tensor,
+            return_components: bool = False,
+    ):
         """
         Training loss exactly following Eq.(8).
         """
@@ -136,9 +156,22 @@ class KspaceDiffusion(nn.Module):
         # 只在 DeltaM support 上计算 delta loss，避免被整幅图均值稀释
 
         loss_img, loss_img_real, loss_img_imag, loss_img_mag = self._compute_image_losses(x0_pred, x0)
-        loss_delta = F.l1_loss(delta_pred, delta_gt)
-        loss=loss_delta + self.lambda_img * loss_img
+        # IMPORTANT:
+        # delta supervision is sparse by construction (only on newly revealed band).
+        # averaging over full k-space would heavily dilute gradients.
+        loss_delta = self._masked_l1_complex(delta_pred, delta_gt, delta_m)
+        loss = loss_delta + self.lambda_img * loss_img
 
+        if return_components:
+            return {
+                "loss_total": loss,
+                "loss_delta": loss_delta.detach(),
+                "loss_img": loss_img.detach(),
+                "loss_img_real": loss_img_real.detach(),
+                "loss_img_imag": loss_img_imag.detach(),
+                "loss_img_mag": loss_img_mag.detach(),
+                "delta_support_ratio": delta_m.mean().detach(),
+            }
         return loss
 
     def _compute_image_losses(self, x0_pred: torch.Tensor, x0: torch.Tensor):
@@ -223,4 +256,5 @@ class KspaceDiffusion(nn.Module):
 
         # sample t in [1, T]
         t = torch.randint(1, self.num_timesteps + 1, (bsz,), device=kspace.device).long()
-        return self.p_losses(kspace, mask, t)
+        return_components = bool(kwargs.get("return_components", False))
+        return self.p_losses(kspace, mask, t, return_components=return_components)
